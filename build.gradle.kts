@@ -11,7 +11,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-bentofx"
     group = "io.github.qupath"
-    version = "0.1.0-SNAPSHOT"
+    version = "0.1.0"
     description = "A simple QuPath extension"
     automaticModule = "io.github.qupath.extension.bentofx"
 }
