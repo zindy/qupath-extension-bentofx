@@ -115,6 +115,12 @@ public class BentofxExtension implements QuPathExtension {
 	 * First convert the QuPath layout into BentoFX panels
 	 */
 	private void bentoSetup() {
+		if (bento != null) {
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.bento-already-setup"));
+			logger.error(resources.getString("error.bento-already-setup"));
+			return;
+		}
+
         // Build Bento root
         bento = new Bento();
         bento.placeholderBuilding().setDockablePlaceholderFactory(d -> new Label("Empty Dockable"));
@@ -212,7 +218,12 @@ public class BentofxExtension implements QuPathExtension {
 			dockable.setDragGroup(1);
 			viewerLeaf.addDockables(dockable);
 		}
-		      
+
+		
+		// FIXME This seems to at least allow for a refresh to occur later... but not together with the showInfoNotification()
+		//Dialogs.showInfoNotification(resources.getString("name"), resources.getString("setup.complete"));
+		rootBranch.requestFocus();
+		rootBranch.requestLayout();
 	}
     /**
      * Find all non-main QuPath windows and return them as a map
@@ -249,6 +260,12 @@ public class BentofxExtension implements QuPathExtension {
 	 * First step, convert the split layout
 	 */
 	private void bentoCapture() {
+		if (bento == null) {
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.bento-not-setup"));
+			logger.error(resources.getString("error.bento-not-setup"));
+			return;
+		}
+
 		Map<String, Parent> paneMap = getDialogWindowsPanes();
 		
 		for (Map.Entry<String, Parent> entry : paneMap.entrySet()) {
@@ -273,6 +290,10 @@ public class BentofxExtension implements QuPathExtension {
 				viewerLeaf.addDockables(dockable);
 			}
 		}
+
+		Dialogs.showInfoNotification(resources.getString("name"), 
+			(paneMap.size() == 0)?
+				resources.getString("info.no-capture"):resources.getString("info.windows-captured"));
 	}
 
 
