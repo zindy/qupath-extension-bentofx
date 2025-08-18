@@ -2,6 +2,8 @@
 
 This repo contains an extension which integrates BentoFX docking panels into QuPath.
 
+![Screenshot with extension enabled](assets/qupath-bentofx-screenshot.png)
+
 You can follow its progress over at https://forum.image.sc/t/qupath-gui-with-dockable-panels-experimental-proof-of-concept/115582
 
 BentoFX is available over at https://github.com/Col-E/BentoFX/
