@@ -188,7 +188,7 @@ public class BentofxExtension implements QuPathExtension {
 				dockable.setTitle(tab.getText());
 				dockable.setNode(tab.getContent());
 				dockable.setClosable(false);  // Remove close button
-				dockable.setDragGroup(0); // separate group from analysis pane
+				dockable.setDragGroupMask(0); // separate group from analysis pane
 				analysisLeaf.addDockables(dockable);
 			});
 
@@ -215,7 +215,7 @@ public class BentofxExtension implements QuPathExtension {
 				dockable.setClosable(false);
 			}
 				
-			dockable.setDragGroup(1);
+			dockable.setDragGroupMask(1);
 			viewerLeaf.addDockables(dockable);
 		}
 
@@ -281,11 +281,11 @@ public class BentofxExtension implements QuPathExtension {
 			dockable.setNode(pane);
 			
 			if (paneWidth < 400) {
-				dockable.setDragGroup(0);
+				dockable.setDragGroupMask(0);
 				dockable.setClosable(true);
 				analysisLeaf.addDockables(dockable);
 			} else {
-				dockable.setDragGroup(1);
+				dockable.setDragGroupMask(1);
 				dockable.setClosable(true);
 				viewerLeaf.addDockables(dockable);
 			}

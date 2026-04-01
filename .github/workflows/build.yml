@@ -2,18 +2,52 @@ name: Run gradle build
 
 on:
   push:
-    branches:
-      - "main"
+    branches: ["main"]
+    tags: ["v*"]
   pull_request:
-    branches:
-      - "main"
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     uses: qupath/actions/.github/workflows/gradle.yml@main
     with:
       gradle-args: shadowJar
+
+  create_release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Version Alignment
+        run: |
+          FILE_VERSION=$(cat VERSION | sed 's/-SNAPSHOT//')
+          TAG_VERSION=${GITHUB_REF_NAME#v}
+          if [[ "$TAG_VERSION" != "$FILE_VERSION"* ]]; then
+            echo "Error: Tag $TAG_VERSION does not match VERSION file $FILE_VERSION"
+            exit 1
+          fi
+
+      # This step ensures we have the JAR file built in the previous job
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Note: The 'name' here depends on what the QuPath reusable workflow calls its artifact.
+          # Usually it is 'Artifacts' or 'build-artifacts'.
+          path: dist
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*.jar
+          # If the tag contains 'rc' or 'beta', mark it as a pre-release in GitHub
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') }}
+          generate_release_notes: true
