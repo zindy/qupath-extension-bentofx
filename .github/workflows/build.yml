@@ -2,7 +2,6 @@ name: Run gradle build
 
 on:
   push:
-    branches: ["main"]
     tags: ["v*"]
   pull_request:
     branches: ["main"]
@@ -15,6 +14,8 @@ jobs:
   build:
     uses: qupath/actions/.github/workflows/gradle.yml@main
     with:
+      java-version: 25
+      java-distribution: temurin
       gradle-args: shadowJar
 
   create_release:
@@ -51,3 +52,4 @@ jobs:
           # If the tag contains 'rc' or 'beta', mark it as a pre-release in GitHub
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') }}
           generate_release_notes: true
+
