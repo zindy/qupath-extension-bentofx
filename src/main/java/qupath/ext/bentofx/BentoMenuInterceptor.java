@@ -51,6 +51,9 @@ public class BentoMenuInterceptor {
         this.builder = builder;
         this.rootBranch = rootBranch;
         this.defaultViewerLeaf = defaultViewerLeaf;
+
+        QuPathGUI.getInstance().getViewerManager().activeViewerProperty()
+        .addListener((obs, oldViewer, newViewer) -> showViewerTab(newViewer));
     }
 
     /** Remember which dockable hosts which viewer, so closing the tab can close the viewer. */
@@ -58,8 +61,33 @@ public class BentoMenuInterceptor {
         viewerByDockable.put(dockable, viewer);
     }
 
+    /** True while a viewer close is in progress, so tab-selection events don't override its choice of active viewer. */
+    private boolean closeInProgress = false;
+
+    private void activateViewer(QuPathViewer viewer) {
+        ViewerManager vm = QuPathGUI.getInstance().getViewerManager();
+        vm.setActiveViewer(viewer);                  // immediate; no-op if already active
+        Platform.runLater(() -> {
+            // Real focus last: QuPath's own focus listener treats this as "the active viewer"
+            viewer.getView().requestFocus();
+            vm.setActiveViewer(viewer);              // in case focus landed elsewhere in between
+        });
+    }
+
     /** Register with bento.events().addEventListener(...) */
     public void onDockEvent(DockEvent event) {
+        logger.trace("Dock event: {}", event.getClass().getSimpleName());
+
+        // Tab clicked (or otherwise selected): make its viewer the active one
+        if (event instanceof DockEvent.DockableSelected selected) {
+            QuPathViewer viewer = viewerByDockable.get(selected.dockable());
+            logger.debug("Tab selected: '{}' -> viewer {} (closeInProgress={})",
+                    selected.dockable().getTitle(), viewer, closeInProgress);
+            if (viewer != null && !closeInProgress)
+                activateViewer(viewer);
+            return;
+        }
+            
         if (!(event instanceof DockEvent.DockableClosing closing))
             return;
         QuPathViewer viewer = viewerByDockable.get(closing.dockable());
@@ -76,11 +104,22 @@ public class BentoMenuInterceptor {
         }
 
         // 2. Don't leave a dead viewer as the active one
-        if (vm.getActiveViewer() == viewer) {
-            vm.getAllViewers().stream()
-                    .filter(v -> v != viewer)
-                    .findFirst()
-                    .ifPresent(vm::setActiveViewer);
+        var all = vm.getAllViewers();
+        int idx = all.indexOf(viewer);
+        QuPathViewer target = null;
+        if (idx > 0)
+            target = all.get(idx - 1);
+        else if (all.size() > 1)
+            target = all.get(1);
+        
+        if (target != null && vm.getActiveViewer() == viewer) {
+            final QuPathViewer newActive = target;
+            closeInProgress = true;
+            vm.setActiveViewer(newActive);
+            Platform.runLater(() -> {
+                vm.setActiveViewer(newActive);
+                closeInProgress = false;
+            });        
         }
 
         // 3. Detach listeners/bindings
@@ -117,6 +156,23 @@ public class BentoMenuInterceptor {
                 }
             });
         });
+    }
+
+    /** Bring the tab hosting this viewer to the front, if it isn't already. */
+    private void showViewerTab(QuPathViewer viewer) {
+        if (viewer == null || viewer.getView() == null)
+            return;
+        LeafMatch match = findLeafAndParent(rootBranch, viewer.getView());
+        if (match == null)
+            return;
+        DockContainerLeaf leaf = match.leaf();
+        for (Dockable d : leaf.getDockables()) {
+            if (d.getNode() == viewer.getView()) {
+                if (leaf.getSelectedDockable() != d)
+                    leaf.selectDockable(d);
+                return;
+            }
+        }
     }
 
     private void rebindMenuItems(List<MenuItem> items, String targetRowText, String targetColText, QuPathViewer viewer) {
@@ -208,7 +264,7 @@ public class BentoMenuInterceptor {
     private void logTree(String label) {
         StringBuilder sb = new StringBuilder(label).append('\n');
         dumpTree(rootBranch, "", sb);
-        logger.info(sb.toString());
+        logger.debug(sb.toString());
     }
 
     private void splitBentoViewer(QuPathViewer targetViewer, Orientation splitOrientation) {

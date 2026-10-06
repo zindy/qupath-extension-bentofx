@@ -199,6 +199,9 @@ public class BentofxExtension implements QuPathExtension {
 
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
+
+		logger.info("BentoFX layout initialised with {} viewer(s)", viewerManager.getAllViewers().size());
+
 	}
 
 	/**
