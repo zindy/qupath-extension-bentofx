@@ -29,7 +29,9 @@ qupathExtension {
 dependencies {
 
     // Extension relies on BentoFX
-    implementation("software.coley:bento-fx:0.15.1")
+    implementation("software.coley.bento-fx:core:0.16.0")
+    //implementation "software.coley.bento-fx:core:${version}"
+
 
     // Main dependencies for most QuPath extensions
     shadow(libs.bundles.qupath)
