@@ -54,6 +54,7 @@ public class BentofxExtension implements QuPathExtension {
 	private DockContainerLeaf analysisLeaf;
 
 	private BentoMenuInterceptor menuInterceptor;
+	private AnalysisPaneToggle analysisToggle;
 
 	@Override
 	public void installExtension(QuPathGUI qupath) {
@@ -88,7 +89,7 @@ public class BentofxExtension implements QuPathExtension {
 		}
 
 		// Build Bento root
-		bento = new Bento();
+		bento = DragGroups.newBento();
 		bento.placeholderBuilding().setDockablePlaceholderFactory(d -> new Label("Empty Dockable"));
 		bento.placeholderBuilding().setContainerPlaceholderFactory(c -> new Label("Empty Container"));
 
@@ -107,6 +108,8 @@ public class BentofxExtension implements QuPathExtension {
 		DockContainerBranch.setResizableWithParent(analysisLeaf, false);
 
 		var qupath = QuPathGUI.getInstance();
+		// If the analysis pane was hidden, let QuPath restore its own layout before we rebuild it
+		qupath.showAnalysisPaneProperty().set(true);
 		var viewerManager = qupath.getViewerManager();
 		var analysisPane = qupath.getAnalysisTabPane();
 
@@ -157,7 +160,7 @@ public class BentofxExtension implements QuPathExtension {
 				dockable.setTitle(tab.getText());
 				dockable.setNode(tab.getContent());
 				dockable.setClosable(false);  // Remove close button
-				dockable.setDragGroupMask(0); // Separate group from viewers
+				dockable.setDragGroupMask(DragGroups.ANALYSIS);
 				analysisLeaf.addDockables(dockable);
 			});
 
@@ -176,9 +179,8 @@ public class BentofxExtension implements QuPathExtension {
 			dockable.setTitle("Viewer " + (i + 1));
 			var v = viewer.getView();
 
-			v.setOnDragOver(null);
-			v.setOnDragDropped(null);
-			v.setOnDragDone(null);
+			// Keep QuPath's file drop, but let Bento tab drags through
+			ViewerDragDrop.install(qupath, v);
 
 			dockable.setNode(v);
 			menuInterceptor.trackViewer(dockable, viewer);
@@ -187,7 +189,7 @@ public class BentofxExtension implements QuPathExtension {
 				dockable.setClosable(false);
 			}
 
-			dockable.setDragGroupMask(1);
+			dockable.setDragGroupMask(DragGroups.VIEWER);
 			viewerLeaf.addDockables(dockable);
 		}
 
@@ -196,6 +198,9 @@ public class BentofxExtension implements QuPathExtension {
 		for (QuPathViewer viewer : viewers) {
 			menuInterceptor.registerViewer(viewer);
 		}
+
+		// Take over Shift+A / View > Show analysis pane (QuPath's handler would break the layout)
+		analysisToggle = new AnalysisPaneToggle(qupath, rootBranch, analysisLeaf);
 
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
@@ -260,15 +265,13 @@ public class BentofxExtension implements QuPathExtension {
 			// Narrow form-like panels (InstanSeg) also get a ScrollPane so they can shrink.
 			dockable.setNode(PanelFitter.fit(pane, narrow));
 
-			if (narrow) {
-				dockable.setDragGroupMask(0);
-				dockable.setClosable(true);
+			// FLEX: the width only picks the initial leaf; the panel can then be dragged anywhere
+			dockable.setDragGroupMask(DragGroups.FLEX);
+			dockable.setClosable(true);
+			if (narrow)
 				analysisLeaf.addDockables(dockable);
-			} else {
-				dockable.setDragGroupMask(1);
-				dockable.setClosable(true);
+			else
 				viewerLeaf.addDockables(dockable);
-			}
 		}
 
 		Dialogs.showInfoNotification(

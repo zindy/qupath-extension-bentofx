@@ -286,12 +286,10 @@ public class BentoMenuInterceptor {
         newDockable.setTitle("Viewer " + nextViewerNumber());
     
         Node viewerNode = newViewer.getView();
-        viewerNode.setOnDragOver(null);
-        viewerNode.setOnDragDropped(null);
-        viewerNode.setOnDragDone(null);
+        ViewerDragDrop.install(QuPathGUI.getInstance(), viewerNode);
     
         newDockable.setNode(viewerNode);
-        newDockable.setDragGroupMask(1);
+        newDockable.setDragGroupMask(DragGroups.VIEWER);
         trackViewer(newDockable, newViewer);
     
         // 3. Find the leaf containing the calling viewer
