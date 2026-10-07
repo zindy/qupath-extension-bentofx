@@ -252,11 +252,15 @@ public class BentofxExtension implements QuPathExtension {
 			double paneWidth = pane.getBoundsInLocal().getWidth();
 			logger.debug("Processing window '{}' - width={}", title, paneWidth);
 
+			boolean narrow = paneWidth < 400;
+
 			Dockable dockable = builder.dockable();
 			dockable.setTitle(title);
-			dockable.setNode(pane);
+			// Peel anonymous wrappers, lift USE_PREF_SIZE caps, add grow hints.
+			// Narrow form-like panels (InstanSeg) also get a ScrollPane so they can shrink.
+			dockable.setNode(PanelFitter.fit(pane, narrow));
 
-			if (paneWidth < 400) {
+			if (narrow) {
 				dockable.setDragGroupMask(0);
 				dockable.setClosable(true);
 				analysisLeaf.addDockables(dockable);
