@@ -40,6 +40,12 @@ final class PanelFitter {
 
     private static final Logger logger = LoggerFactory.getLogger(PanelFitter.class);
 
+    /** Floors so that a pane can never be dragged down to zero/negative size. */
+    static final double MIN_PANEL_W = 160;
+    static final double MIN_PANEL_H = 120;
+    static final double MIN_VIEWER_W = 160;
+    static final double MIN_VIEWER_H = 120;
+
     private PanelFitter() {}
 
     /**
@@ -64,7 +70,27 @@ final class PanelFitter {
         scroll.setFitToHeight(true);
         scroll.setPadding(Insets.EMPTY);
         scroll.getStyleClass().add("edge-to-edge");
+        // A ScrollPane's own minimum is only a few pixels: without a floor the SplitPane
+        // lets the leaf be squashed to nothing.
+        enforceMinSize(scroll, MIN_PANEL_W, MIN_PANEL_H);
         return scroll;
+    }
+
+    /**
+     * Raise (never lower) the minimum size of a region. A minimum that is USE_PREF_SIZE is left alone,
+     * since that is already at least as large as the preferred size.
+     * Minimum sizes propagate: DockContainerLeaf is a StackPane and ContentWrapper a BorderPane, so
+     * the leaf's minimum follows its dockable's node, and SplitPane honours item minimums.
+     */
+    static void enforceMinSize(Node node, double minW, double minH) {
+        if (!(node instanceof Region r))
+            return;
+        double w = r.getMinWidth();
+        if (w != Region.USE_PREF_SIZE && w < minW)
+            r.setMinWidth(minW);
+        double h = r.getMinHeight();
+        if (h != Region.USE_PREF_SIZE && h < minH)
+            r.setMinHeight(minH);
     }
 
     // ------------------------------------------------------------------ peeling

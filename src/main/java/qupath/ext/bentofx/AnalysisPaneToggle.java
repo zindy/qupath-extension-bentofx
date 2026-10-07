@@ -75,7 +75,7 @@ final class AnalysisPaneToggle {
         }
         double w = host.asRegion().getWidth();
         if (w > 0)
-            lastWidth = w;
+            lastWidth = Math.max(w, PanelFitter.MIN_PANEL_W);
         if (root.removeContainer(host))
             hiddenHost = host;
     }

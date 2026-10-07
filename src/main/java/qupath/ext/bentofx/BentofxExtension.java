@@ -181,6 +181,7 @@ public class BentofxExtension implements QuPathExtension {
 
 			// Keep QuPath's file drop, but let Bento tab drags through
 			ViewerDragDrop.install(qupath, v);
+			PanelFitter.enforceMinSize(v, PanelFitter.MIN_VIEWER_W, PanelFitter.MIN_VIEWER_H);
 
 			dockable.setNode(v);
 			menuInterceptor.trackViewer(dockable, viewer);

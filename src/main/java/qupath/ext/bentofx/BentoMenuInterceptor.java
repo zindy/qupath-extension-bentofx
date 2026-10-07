@@ -287,6 +287,7 @@ public class BentoMenuInterceptor {
     
         Node viewerNode = newViewer.getView();
         ViewerDragDrop.install(QuPathGUI.getInstance(), viewerNode);
+        PanelFitter.enforceMinSize(viewerNode, PanelFitter.MIN_VIEWER_W, PanelFitter.MIN_VIEWER_H);
     
         newDockable.setNode(viewerNode);
         newDockable.setDragGroupMask(DragGroups.VIEWER);
