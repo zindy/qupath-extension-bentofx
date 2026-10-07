@@ -57,6 +57,11 @@ final class AnalysisPaneToggle {
         });
     }
 
+    /** Make sure the analysis pane is showing (e.g. before docking a captured panel into it). */
+    void ensureVisible() {
+        visible.set(true);
+    }
+
     /** The direct child of the root that contains the analysis leaf (the leaf itself unless it was split). */
     private DockContainer host() {
         DockContainer c = analysisLeaf;

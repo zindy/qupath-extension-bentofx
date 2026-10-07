@@ -25,10 +25,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ResourceBundle;
+import java.util.function.Predicate;
 
 import software.coley.bentofx.Bento;
 import software.coley.bentofx.building.DockBuilding;
 import software.coley.bentofx.dockable.Dockable;
+import software.coley.bentofx.layout.DockContainer;
 import software.coley.bentofx.layout.container.DockContainerBranch;
 import software.coley.bentofx.layout.container.DockContainerLeaf;
 import software.coley.bentofx.util.BentoUtils;
@@ -55,6 +57,7 @@ public class BentofxExtension implements QuPathExtension {
 
 	private BentoMenuInterceptor menuInterceptor;
 	private AnalysisPaneToggle analysisToggle;
+	private PaneSizing paneSizing;
 
 	@Override
 	public void installExtension(QuPathGUI qupath) {
@@ -203,6 +206,11 @@ public class BentofxExtension implements QuPathExtension {
 		// Take over Shift+A / View > Show analysis pane (QuPath's handler would break the layout)
 		analysisToggle = new AnalysisPaneToggle(qupath, rootBranch, analysisLeaf);
 
+		// Fixed pixel size for panel panes, proportional for viewers. Registered after the initial
+		// structure is built, so it only reacts to later changes (splits, closes, drops, show/hide).
+		paneSizing = new PaneSizing();
+		bento.events().addEventListener(paneSizing::onDockEvent);
+
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
 
@@ -256,6 +264,7 @@ public class BentofxExtension implements QuPathExtension {
 			Parent pane = entry.getValue();
 
 			double paneWidth = pane.getBoundsInLocal().getWidth();
+			double paneHeight = pane.getBoundsInLocal().getHeight();
 			logger.debug("Processing window '{}' - width={}", title, paneWidth);
 
 			boolean narrow = paneWidth < 400;
@@ -265,20 +274,89 @@ public class BentofxExtension implements QuPathExtension {
 			// Peel anonymous wrappers, lift USE_PREF_SIZE caps, add grow hints.
 			// Narrow form-like panels (InstanSeg) also get a ScrollPane so they can shrink.
 			dockable.setNode(PanelFitter.fit(pane, narrow));
+			// Remember the window's own size as the starting size of any pane made for it
+			paneSizing.declare(dockable, paneWidth, paneHeight);
 
 			// FLEX: the width only picks the initial leaf; the panel can then be dragged anywhere
 			dockable.setDragGroupMask(DragGroups.FLEX);
 			dockable.setClosable(true);
-			if (narrow)
-				analysisLeaf.addDockables(dockable);
-			else
-				viewerLeaf.addDockables(dockable);
+
+			// Never use the leaf fields directly: a leaf that was emptied by dragging is pruned from the
+			// tree, and adding to it would silently put the panel in a detached, invisible leaf.
+			DockContainerLeaf target = narrow ? analysisTarget() : viewerTarget();
+			if (target.addDockable(dockable)) {
+				target.selectDockable(dockable);
+				logger.debug("Docked '{}' into leaf {}", title, target.getIdentifier());
+			} else {
+				logger.warn("Could not dock '{}' into leaf {}", title, target.getIdentifier());
+			}
 		}
 
 		Dialogs.showInfoNotification(
 			resources.getString("name"),
 			paneMap.isEmpty() ? resources.getString("info.no-capture") : resources.getString("info.windows-captured")
 		);
+	}
+
+	// ------------------------------------------------------------------ capture targets
+
+	/** True if the container is part of the live tree below the Bento root. */
+	private boolean isAttached(DockContainer c) {
+		for (DockContainer p = c; p != null; p = p.getParentContainer())
+			if (p == rootBranch)
+				return true;
+		return false;
+	}
+
+	private static DockContainerLeaf findLeaf(DockContainer from, Predicate<DockContainerLeaf> test) {
+		if (from instanceof DockContainerLeaf leaf)
+			return test.test(leaf) ? leaf : null;
+		if (from instanceof DockContainerBranch branch)
+			for (DockContainer child : branch.getChildContainers()) {
+				DockContainerLeaf found = findLeaf(child, test);
+				if (found != null)
+					return found;
+			}
+		return null;
+	}
+
+	/** The analysis leaf, shown first if the analysis pane is currently hidden. */
+	private DockContainerLeaf analysisTarget() {
+		if (!isAttached(analysisLeaf))
+			analysisToggle.ensureVisible();
+		if (isAttached(analysisLeaf))
+			return analysisLeaf;
+		logger.warn("Analysis leaf is not in the layout; docking into the first available leaf");
+		return anyLeafOrNew();
+	}
+
+	/** Leaf of the active viewer, else any attached leaf holding a viewer, else a new leaf. */
+	private DockContainerLeaf viewerTarget() {
+		QuPathViewer active = QuPathGUI.getInstance().getViewerManager().getActiveViewer();
+		if (active != null && active.getView() != null) {
+			Node view = active.getView();
+			DockContainerLeaf leaf = findLeaf(rootBranch,
+					l -> l.getDockables().stream().anyMatch(d -> d.getNode() == view));
+			if (leaf != null)
+				return leaf;
+		}
+		DockContainerLeaf leaf = findLeaf(rootBranch,
+				l -> l.getDockables().stream().anyMatch(d -> d.getDragGroupMask() == DragGroups.VIEWER));
+		if (leaf != null)
+			return leaf;
+		if (!isAttached(viewerLeaf))
+			logger.warn("The original viewer leaf is no longer in the layout");
+		return anyLeafOrNew();
+	}
+
+	private DockContainerLeaf anyLeafOrNew() {
+		DockContainerLeaf leaf = findLeaf(rootBranch, l -> !l.getDockables().isEmpty());
+		if (leaf != null)
+			return leaf;
+		leaf = builder.leaf("captured-" + System.nanoTime());
+		leaf.setSide(Side.TOP);
+		rootBranch.addContainer(leaf);
+		return leaf;
 	}
 
 	@Override
