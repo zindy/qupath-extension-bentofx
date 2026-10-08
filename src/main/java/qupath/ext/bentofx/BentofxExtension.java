@@ -58,6 +58,7 @@ public class BentofxExtension implements QuPathExtension {
 	private BentoMenuInterceptor menuInterceptor;
 	private AnalysisPaneToggle analysisToggle;
 	private PaneSizing paneSizing;
+	private CapturedWindows capturedWindows;
 
 	@Override
 	public void installExtension(QuPathGUI qupath) {
@@ -211,6 +212,10 @@ public class BentofxExtension implements QuPathExtension {
 		paneSizing = new PaneSizing();
 		bento.events().addEventListener(paneSizing::onDockEvent);
 
+		// Closing a captured tab hands the dialog back to its original Stage
+		capturedWindows = new CapturedWindows(this::revealDockable);
+		bento.events().addEventListener(capturedWindows::onDockEvent);
+
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
 
@@ -221,15 +226,17 @@ public class BentofxExtension implements QuPathExtension {
 	/**
 	 * Find all non-main QuPath windows and return their root panes.
 	 */
-	private Map<String, Parent> getDialogWindowsPanes() {
-		Map<String, Parent> paneMap = new HashMap<>();
+	private record CapturedStage(String title, Stage stage, Parent root) {}
+
+	private List<CapturedStage> getDialogWindowsPanes() {
+		List<CapturedStage> result = new ArrayList<>();
 		Stage mainStage = QuPathGUI.getInstance().getStage();
 
 		List<Window> windows = new ArrayList<>(Window.getWindows());
 
 		for (Window window : windows) {
 			if (window instanceof Stage stage) {
-				if (stage != mainStage && stage.isShowing() && 
+				if (stage != mainStage && stage.isShowing() && !capturedWindows.isCapturedStage(stage) &&
 					stage.getTitle() != null && !stage.getTitle().isEmpty()) {
 
 					String windowTitle = stage.getTitle();
@@ -237,14 +244,14 @@ public class BentofxExtension implements QuPathExtension {
 						Parent pane = stage.getScene().getRoot();
 						// Decouple root before closing stage
 						stage.getScene().setRoot(new Group()); 
-						paneMap.put(windowTitle, pane);
+						result.add(new CapturedStage(windowTitle, stage, pane));
 						logger.debug("Found floating window: {}", windowTitle);
 					}
 					stage.close();
 				}
 			}
 		}
-		return paneMap;
+		return result;
 	}
 
 	/**
@@ -257,11 +264,11 @@ public class BentofxExtension implements QuPathExtension {
 			return;
 		}
 
-		Map<String, Parent> paneMap = getDialogWindowsPanes();
+		List<CapturedStage> captured = getDialogWindowsPanes();
 
-		for (Map.Entry<String, Parent> entry : paneMap.entrySet()) {
-			String title = entry.getKey();
-			Parent pane = entry.getValue();
+		for (CapturedStage cs : captured) {
+			String title = cs.title();
+			Parent pane = cs.root();
 
 			double paneWidth = pane.getBoundsInLocal().getWidth();
 			double paneHeight = pane.getBoundsInLocal().getHeight();
@@ -273,7 +280,8 @@ public class BentofxExtension implements QuPathExtension {
 			dockable.setTitle(title);
 			// Peel anonymous wrappers, lift USE_PREF_SIZE caps, add grow hints.
 			// Narrow form-like panels (InstanSeg) also get a ScrollPane so they can shrink.
-			dockable.setNode(PanelFitter.fit(pane, narrow));
+			PanelFitter.Fitted fitted = PanelFitter.fit(pane, narrow);
+			dockable.setNode(fitted.node());
 			// Remember the window's own size as the starting size of any pane made for it
 			paneSizing.declare(dockable, paneWidth, paneHeight);
 
@@ -286,16 +294,36 @@ public class BentofxExtension implements QuPathExtension {
 			DockContainerLeaf target = narrow ? analysisTarget() : viewerTarget();
 			if (target.addDockable(dockable)) {
 				target.selectDockable(dockable);
+				// Remember the original Stage so closing the tab can give the dialog back
+				capturedWindows.register(dockable, cs.stage(), pane, fitted);
 				logger.debug("Docked '{}' into leaf {}", title, target.getIdentifier());
 			} else {
-				logger.warn("Could not dock '{}' into leaf {}", title, target.getIdentifier());
+				logger.warn("Could not dock '{}' into leaf {}; restoring its window", title, target.getIdentifier());
+				fitted.undo().run();
+				PanelFitter.detachFromParent(pane);
+				cs.stage().getScene().setRoot(pane);
+				cs.stage().show();
 			}
 		}
 
 		Dialogs.showInfoNotification(
 			resources.getString("name"),
-			paneMap.isEmpty() ? resources.getString("info.no-capture") : resources.getString("info.windows-captured")
+			captured.isEmpty() ? resources.getString("info.no-capture") : resources.getString("info.windows-captured")
 		);
+	}
+
+	/** Bring a docked captured dialog to the front: show its pane, select its tab, focus it. */
+	private void revealDockable(Dockable dockable) {
+		DockContainerLeaf leaf = dockable.getContainer();
+		if (leaf != null && !isAttached(leaf))
+			analysisToggle.ensureVisible();   // docked in the currently hidden analysis pane
+		leaf = dockable.getContainer();
+		if (leaf != null && isAttached(leaf))
+			leaf.selectDockable(dockable);
+		QuPathGUI.getInstance().getStage().toFront();
+		Node node = dockable.getNode();
+		if (node != null)
+			node.requestFocus();
 	}
 
 	// ------------------------------------------------------------------ capture targets

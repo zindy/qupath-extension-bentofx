@@ -18,6 +18,7 @@ import javafx.scene.layout.VBox;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -54,16 +55,17 @@ final class PanelFitter {
      *                   (recommended for narrow, form-like panels such as InstanSeg)
      * @return the node to hand to {@code Dockable.setNode(...)}
      */
-    static Node fit(Parent root, boolean scrollable) {
+    static Fitted fit(Parent root, boolean scrollable) {
         logChain("captured root", root);
 
-        Node content = peel(root);
+        List<Runnable> undo = new ArrayList<>();
+        Node content = peel(root, undo);
         uncapChain(content);
 
         logChain("fitted content", content);
 
         if (!scrollable)
-            return content;
+            return new Fitted(content, () -> undoAll(undo));
 
         ScrollPane scroll = new ScrollPane(content);
         scroll.setFitToWidth(true);
@@ -73,7 +75,21 @@ final class PanelFitter {
         // A ScrollPane's own minimum is only a few pixels: without a floor the SplitPane
         // lets the leaf be squashed to nothing.
         enforceMinSize(scroll, MIN_PANEL_W, MIN_PANEL_H);
-        return scroll;
+        return new Fitted(scroll, () -> {
+            scroll.setContent(null);
+            undoAll(undo);
+        });
+    }
+
+    /**
+     * Result of {@link #fit}: the node to dock, and an action that restores the original node hierarchy
+     * (wrappers and parent/child links; size-cap changes are left in place, they are harmless in a window).
+     */
+    record Fitted(Node node, Runnable undo) {}
+
+    private static void undoAll(List<Runnable> undo) {
+        for (int i = undo.size() - 1; i >= 0; i--)
+            undo.get(i).run();
     }
 
     /**
@@ -96,11 +112,12 @@ final class PanelFitter {
     // ------------------------------------------------------------------ peeling
 
     /** Remove pure wrappers until the first node that actually carries something. */
-    static Node peel(Node node) {
+    static Node peel(Node node, List<Runnable> undo) {
         while (isPureWrapper(node)) {
             Parent wrapper = (Parent) node;
             Node child = soleChild(wrapper);
             detach(wrapper, child);
+            undo.add(() -> reattach(wrapper, child));
             logger.debug("Peeled {} -> {}", describe(wrapper), describe(child));
             node = child;
         }
@@ -140,6 +157,34 @@ final class PanelFitter {
             p.getChildren().remove(child);
         else if (wrapper instanceof Group g)
             g.getChildren().remove(child);
+    }
+
+    private static void reattach(Parent wrapper, Node child) {
+        detachFromParent(child);
+        if (wrapper instanceof BorderPane bp)
+            bp.setCenter(child);
+        else if (wrapper instanceof Pane p)
+            p.getChildren().add(child);
+        else if (wrapper instanceof Group g)
+            g.getChildren().add(child);
+    }
+
+    /** Remove a node from whatever simple container currently holds it (no-op if it has no parent). */
+    static void detachFromParent(Node node) {
+        Parent parent = node.getParent();
+        if (parent == null)
+            return;
+        if (parent instanceof BorderPane bp) {
+            if (bp.getCenter() == node) bp.setCenter(null);
+            else if (bp.getTop() == node) bp.setTop(null);
+            else if (bp.getBottom() == node) bp.setBottom(null);
+            else if (bp.getLeft() == node) bp.setLeft(null);
+            else if (bp.getRight() == node) bp.setRight(null);
+        } else if (parent instanceof Pane p) {
+            p.getChildren().remove(node);
+        } else if (parent instanceof Group g) {
+            g.getChildren().remove(node);
+        }
     }
 
     // ------------------------------------------------------------------ uncapping
