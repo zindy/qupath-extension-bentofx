@@ -36,6 +36,11 @@ final class ViewerDragDrop {
         viewerView.setOnDragDone(e -> forward(listener, e));
     }
 
+    /** Put QuPath's own listener back, exactly as ViewerManager installs it. */
+    static void uninstall(QuPathGUI qupath, Node viewerView) {
+        qupath.getDefaultDragDropListener().setupTarget(viewerView);
+    }
+
     private static void forward(DragDropImportListener listener, DragEvent e) {
         if (isBentoDrag(e))
             return;                 // not consumed: Bento's own handlers further up deal with it

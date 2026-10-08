@@ -72,8 +72,18 @@ final class PaneSizing {
             declared.put(dockable, new double[]{width, height + TAB_STRIP_ALLOWANCE});
     }
 
+    private boolean disposed;
+
+    /** Stop reacting to layout events (used while BentoFX is being taken apart). */
+    void dispose() {
+        disposed = true;
+        pending.clear();
+    }
+
     /** Register with {@code bento.events().addEventListener(...)}. */
     void onDockEvent(DockEvent event) {
+        if (disposed)
+            return;
         if (event instanceof DockEvent.ContainerChildAdded added)
             touch(added.container(), null);
         else if (event instanceof DockEvent.ContainerChildRemoved removed)

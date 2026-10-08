@@ -1,5 +1,6 @@
 package qupath.ext.bentofx;
 
+import javafx.application.Platform;
 import javafx.geometry.Orientation;
 import javafx.geometry.Side;
 import javafx.scene.Node;
@@ -8,6 +9,8 @@ import javafx.scene.Group;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 
@@ -60,6 +63,11 @@ public class BentofxExtension implements QuPathExtension {
 	private PaneSizing paneSizing;
 	private CapturedWindows capturedWindows;
 
+	// Remembered so that deactivation can rebuild QuPath's own layout
+	private SplitPane mainSplitPane;
+	private TabPane analysisTabPane;
+	private String bentoCssUrl;
+
 	@Override
 	public void installExtension(QuPathGUI qupath) {
 		if (isInstalled) {
@@ -73,13 +81,17 @@ public class BentofxExtension implements QuPathExtension {
 	private void addMenuItem(QuPathGUI qupath) {
 		var menu = qupath.getMenu("Extensions>" + EXTENSION_NAME, true);
 		
-		MenuItem initItem = new MenuItem("Initialisation");
+		MenuItem initItem = new MenuItem("Initialize BentoFX");
 		initItem.setOnAction(e -> bentoSetup());
 		menu.getItems().add(initItem);
 
 		MenuItem captureItem = new MenuItem("Capture floating windows");
 		captureItem.setOnAction(e -> bentoCapture());
 		menu.getItems().add(captureItem);
+
+		MenuItem deactivateItem = new MenuItem("Deactivate BentoFX");
+		deactivateItem.setOnAction(e -> bentoTeardown());
+		menu.getItems().add(deactivateItem);
 	}
 
 	/**
@@ -124,6 +136,8 @@ public class BentofxExtension implements QuPathExtension {
 		}
 
 		if (node instanceof SplitPane splitPane) {
+			mainSplitPane = splitPane;
+			analysisTabPane = analysisPane;
 			splitPane.getItems().clear();
 			splitPane.getItems().add(rootBranch);
 
@@ -149,7 +163,8 @@ public class BentofxExtension implements QuPathExtension {
 			logger.debug("Applying CSS from {}", cssUrl.toExternalForm());
 			var scene = qupath.getStage().getScene();
 			if (scene != null) {
-				scene.getStylesheets().add(cssUrl.toExternalForm());
+				bentoCssUrl = cssUrl.toExternalForm();
+				scene.getStylesheets().add(bentoCssUrl);
 			}
 		} else {
 			logger.warn("Could not find /bento.css in resources.");
@@ -221,6 +236,108 @@ public class BentofxExtension implements QuPathExtension {
 
 		logger.info("BentoFX layout initialised with {} viewer(s)", viewerManager.getAllViewers().size());
 
+	}
+
+	/**
+	 * Undo {@link #bentoSetup()}: release docked dialogs to their own windows, give Shift+A and the
+	 * viewer context-menu items back to QuPath, rebuild QuPath's analysis tabs and put all viewers in a
+	 * single row of QuPath's own viewer grid.
+	 */
+	private void bentoTeardown() {
+		if (bento == null) {
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.bento-not-setup"));
+			logger.error(resources.getString("error.bento-not-setup"));
+			return;
+		}
+
+		QuPathGUI qupath = QuPathGUI.getInstance();
+		var viewerManager = qupath.getViewerManager();
+
+		// 0. Remember what we need before anything moves
+		boolean analysisVisible = analysisToggle.isVisible();
+		double analysisWidth = analysisToggle.currentWidth();
+		double total = rootBranch.getWidth();
+		QuPathViewer active = viewerManager.getActiveViewer();
+
+		// 1. Stop reacting to layout events, then let go of every node Bento is displaying. Bento binds
+		//    ContentWrapper.center to the selected tab's node, so a node can only be moved elsewhere once the
+		//    selection is cleared ("A bound value cannot be set" otherwise). Clearing the selection is Bento's
+		//    own release path: it unbinds and puts a placeholder in; no events, no pruning.
+		paneSizing.dispose();
+		menuInterceptor.dispose();        // add row/column items, active-viewer listener
+		List<DockContainerLeaf> leaves = new ArrayList<>();
+		collectLeaves(rootBranch, leaves);
+		if (analysisToggle.hiddenHost() != null)
+			collectLeaves(analysisToggle.hiddenHost(), leaves);   // analysis pane currently hidden
+		for (DockContainerLeaf leaf : leaves)
+			leaf.selectDockable(null);
+
+		// 2. Give docked dialogs back to their own windows (and show them again)
+		capturedWindows.releaseAll();
+
+		// 3. Hand the remaining hooks back to QuPath
+		analysisToggle.dispose(qupath);   // Shift+A -> QuPath's own property again
+		List<QuPathViewer> viewers = new ArrayList<>(viewerManager.getAllViewers());
+		for (QuPathViewer viewer : viewers) {
+			ViewerDragDrop.uninstall(qupath, viewer.getView());
+			PanelFitter.resetMinSize(viewer.getView());
+		}
+
+		// 4. Viewers: one row in QuPath's own grid. The grid is still its original 1x1 (row 0 holds a stale
+		//    reference to the first viewer); its row SplitPane is reachable through the public region.
+		SplitPane grid = (SplitPane) viewerManager.getRegion();
+		SplitPane row = (SplitPane) grid.getItems().get(0);
+		row.getItems().setAll(viewers.stream().map(QuPathViewer::getView).toList());
+		viewerManager.resetGridSize();
+
+		// 5. Analysis tabs: their content nodes were moved into Bento. Setting the content again re-attaches
+		//    it to the TabPane's own content region.
+		for (Tab tab : analysisTabPane.getTabs()) {
+			Node content = tab.getContent();
+			if (content != null) {
+				tab.setContent(null);
+				tab.setContent(content);
+			}
+		}
+
+		// 6. Main layout exactly as QuPathMainPaneManager.setAnalysisPaneVisible(true) builds it
+		mainSplitPane.setOnDragDropped(null);
+		mainSplitPane.getItems().setAll(analysisTabPane, viewerManager.getRegion());
+		mainSplitPane.setDividerPosition(0, total > 0 ? Math.min(analysisWidth / total, 0.5) : 0.15);
+
+		// 7. Stylesheet
+		var scene = qupath.getStage().getScene();
+		if (scene != null && bentoCssUrl != null)
+			scene.getStylesheets().remove(bentoCssUrl);
+
+		// 8. Forget the Bento state, so that "Initialisation" can be run again
+		bento = null;
+		builder = null;
+		rootBranch = null;
+		viewerLeaf = null;
+		analysisLeaf = null;
+		menuInterceptor = null;
+		analysisToggle = null;
+		paneSizing = null;
+		capturedWindows = null;
+		mainSplitPane = null;
+		analysisTabPane = null;
+		bentoCssUrl = null;
+
+		// 9. QuPath's handler is back in charge: use it to hide the pane if it was hidden
+		if (!analysisVisible)
+			qupath.showAnalysisPaneProperty().set(false);
+
+		// 10. Keep the same active viewer
+		if (active != null) {
+			Platform.runLater(() -> {
+				viewerManager.setActiveViewer(active);
+				active.getView().requestFocus();
+			});
+		}
+
+		logger.info("BentoFX deactivated; {} viewer(s) in a single row", viewers.size());
+		Dialogs.showInfoNotification(resources.getString("name"), "BentoFX deactivated");
 	}
 
 	/**
@@ -327,6 +444,14 @@ public class BentofxExtension implements QuPathExtension {
 	}
 
 	// ------------------------------------------------------------------ capture targets
+
+	private static void collectLeaves(DockContainer c, List<DockContainerLeaf> out) {
+		if (c instanceof DockContainerLeaf leaf)
+			out.add(leaf);
+		else if (c instanceof DockContainerBranch branch)
+			for (DockContainer child : branch.getChildContainers())
+				collectLeaves(child, out);
+	}
 
 	/** True if the container is part of the live tree below the Bento root. */
 	private boolean isAttached(DockContainer c) {

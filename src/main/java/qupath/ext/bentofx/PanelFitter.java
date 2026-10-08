@@ -20,6 +20,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 /**
  * Prepares the root of a captured dialog so that it fills a BentoFX leaf.
@@ -93,6 +95,23 @@ final class PanelFitter {
     }
 
     /**
+     * The minimum sizes a node had before {@link #enforceMinSize} raised them. QuPath sets an explicit
+     * minimum of 1x1 on every viewer pane (otherwise the canvas, which is not resizable, makes the current
+     * size the minimum), so "computed" is NOT the original value and must not be used for restoring.
+     * Weak keys: the values do not reference the nodes.
+     */
+    private static final Map<Node, double[]> ORIGINAL_MIN = new WeakHashMap<>();
+
+    /** Undo {@link #enforceMinSize}: put back exactly the minimum sizes the node had before. */
+    static void resetMinSize(Node node) {
+        double[] original = ORIGINAL_MIN.remove(node);
+        if (original != null && node instanceof Region r) {
+            r.setMinWidth(original[0]);
+            r.setMinHeight(original[1]);
+        }
+    }
+
+    /**
      * Raise (never lower) the minimum size of a region. A minimum that is USE_PREF_SIZE is left alone,
      * since that is already at least as large as the preferred size.
      * Minimum sizes propagate: DockContainerLeaf is a StackPane and ContentWrapper a BorderPane, so
@@ -102,10 +121,14 @@ final class PanelFitter {
         if (!(node instanceof Region r))
             return;
         double w = r.getMinWidth();
-        if (w != Region.USE_PREF_SIZE && w < minW)
-            r.setMinWidth(minW);
         double h = r.getMinHeight();
-        if (h != Region.USE_PREF_SIZE && h < minH)
+        boolean raiseW = w != Region.USE_PREF_SIZE && w < minW;
+        boolean raiseH = h != Region.USE_PREF_SIZE && h < minH;
+        if (raiseW || raiseH)
+            ORIGINAL_MIN.putIfAbsent(node, new double[]{w, h});
+        if (raiseW)
+            r.setMinWidth(minW);
+        if (raiseH)
             r.setMinHeight(minH);
     }
 
@@ -175,6 +198,9 @@ final class PanelFitter {
         if (parent == null)
             return;
         if (parent instanceof BorderPane bp) {
+            // Bento binds ContentWrapper.center to the selected tab; a bound property cannot be set.
+            // Callers must release such nodes first (clear the leaf's selection).
+            if (bp.centerProperty().isBound()) return;
             if (bp.getCenter() == node) bp.setCenter(null);
             else if (bp.getTop() == node) bp.setTop(null);
             else if (bp.getBottom() == node) bp.setBottom(null);

@@ -3,6 +3,7 @@ package qupath.ext.bentofx;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.value.ChangeListener;
 import javafx.scene.control.SplitPane;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,10 @@ final class AnalysisPaneToggle {
     private final DockContainerLeaf analysisLeaf;
     private final BooleanProperty visible = new SimpleBooleanProperty(true);
 
+    private final ChangeListener<Boolean> listener = (v, o, n) -> {
+        if (n) show(); else hide();
+    };
+
     private DockContainer hiddenHost;
     private double lastWidth = 300;
 
@@ -52,9 +57,35 @@ final class AnalysisPaneToggle {
         var action = qupath.getCommonActions().SHOW_ANALYSIS_PANE;
         action.selectedProperty().unbindBidirectional(qupath.showAnalysisPaneProperty());
         action.selectedProperty().bindBidirectional(visible);
-        visible.addListener((v, o, n) -> {
-            if (n) show(); else hide();
-        });
+        visible.addListener(listener);
+    }
+
+    boolean isVisible() {
+        return visible.get();
+    }
+
+    /** The analysis container while it is hidden (removed from the tree), else null. */
+    DockContainer hiddenHost() {
+        return hiddenHost;
+    }
+
+    /** Current width of the analysis pane (the remembered one while hidden). */
+    double currentWidth() {
+        DockContainer host = host();
+        double w = (hiddenHost == null && host != null) ? host.asRegion().getWidth() : lastWidth;
+        return Math.max(w, PanelFitter.MIN_PANEL_W);
+    }
+
+    /**
+     * Hand Shift+A / View > Show analysis pane back to QuPath: unbind our property from the action and
+     * bind QuPath's own property again. The caller must have restored QuPath's own layout first (the
+     * SplitPane holding [analysis tab pane, viewer region]), because QuPath's handler assumes it.
+     */
+    void dispose(QuPathGUI qupath) {
+        visible.removeListener(listener);
+        var action = qupath.getCommonActions().SHOW_ANALYSIS_PANE;
+        action.selectedProperty().unbindBidirectional(visible);
+        action.selectedProperty().bindBidirectional(qupath.showAnalysisPaneProperty());
     }
 
     /** Make sure the analysis pane is showing (e.g. before docking a captured panel into it). */

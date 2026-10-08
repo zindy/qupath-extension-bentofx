@@ -1,6 +1,9 @@
 package qupath.ext.bentofx;
 
 import javafx.application.Platform;
+import javafx.beans.value.ChangeListener;
+import javafx.event.ActionEvent;
+import javafx.event.EventHandler;
 import javafx.geometry.Orientation;
 import javafx.geometry.Side;
 import javafx.scene.Node;
@@ -47,13 +50,28 @@ public class BentoMenuInterceptor {
 
     private final Map<Dockable, QuPathViewer> viewerByDockable = new HashMap<>();
 
+    /**
+     * The original onAction of each context-menu item we rebound, per viewer, so that dispose() can put it back.
+     * Per viewer because those handlers capture the viewer: the entry is dropped when the viewer is closed.
+     */
+    private final Map<QuPathViewer, Map<MenuItem, EventHandler<ActionEvent>>> originalActions =
+            new java.util.IdentityHashMap<>();
+
+    /** Viewers whose onContextMenuRequested we set (QuPath itself leaves it null). */
+    private final java.util.Set<QuPathViewer> registered =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+    private boolean disposed;
+
+    private final ChangeListener<QuPathViewer> activeViewerListener =
+            (obs, oldViewer, newViewer) -> showViewerTab(newViewer);
+
     public BentoMenuInterceptor(DockBuilding builder, DockContainerBranch rootBranch, DockContainerLeaf defaultViewerLeaf) {
         this.builder = builder;
         this.rootBranch = rootBranch;
         this.defaultViewerLeaf = defaultViewerLeaf;
 
-        QuPathGUI.getInstance().getViewerManager().activeViewerProperty()
-        .addListener((obs, oldViewer, newViewer) -> showViewerTab(newViewer));
+        QuPathGUI.getInstance().getViewerManager().activeViewerProperty().addListener(activeViewerListener);
     }
 
     /** Remember which dockable hosts which viewer, so closing the tab can close the viewer. */
@@ -76,6 +94,8 @@ public class BentoMenuInterceptor {
 
     /** Register with bento.events().addEventListener(...) */
     public void onDockEvent(DockEvent event) {
+        if (disposed)
+            return;
         logger.trace("Dock event: {}", event.getClass().getSimpleName());
 
         // Tab clicked (or otherwise selected): make its viewer the active one
@@ -135,6 +155,9 @@ public class BentoMenuInterceptor {
         }
 
         viewerByDockable.remove(closing.dockable());
+        // Don't keep the closed viewer reachable through our bookkeeping
+        originalActions.remove(viewer);
+        registered.remove(viewer);
     }
 
     /**
@@ -143,6 +166,7 @@ public class BentoMenuInterceptor {
      */
     public void registerViewer(QuPathViewer viewer) {
         if (viewer == null || viewer.getView() == null) return;
+        registered.add(viewer);
 
         String addRowText = QuPathResources.getString("Action.View.Multiview.addRow");
         String addColText = QuPathResources.getString("Action.View.Multiview.addColumn");
@@ -180,8 +204,10 @@ public class BentoMenuInterceptor {
             if (item instanceof Menu subMenu) {
                 rebindMenuItems(subMenu.getItems(), targetRowText, targetColText, viewer);
             } else if (targetRowText.equals(item.getText())) {
+                rememberOriginal(viewer, item);
                 item.setOnAction(e -> addBentoRow(viewer));
             } else if (targetColText.equals(item.getText())) {
+                rememberOriginal(viewer, item);
                 item.setOnAction(e -> addBentoColumn(viewer));
             }
         }
@@ -358,6 +384,29 @@ public class BentoMenuInterceptor {
         return null;
     }
     
+    private void rememberOriginal(QuPathViewer viewer, MenuItem item) {
+        originalActions.computeIfAbsent(viewer, v -> new java.util.IdentityHashMap<>())
+                .putIfAbsent(item, item.getOnAction());   // first call sees QuPath's own handler
+    }
+
+    /**
+     * Undo everything this interceptor attached to QuPath: the active-viewer listener, the rebound
+     * "add row"/"add column" context-menu items (back to QuPath's own handlers), and the
+     * context-menu-requested hooks on the viewers.
+     */
+    public void dispose() {
+        disposed = true;
+        QuPathGUI.getInstance().getViewerManager().activeViewerProperty().removeListener(activeViewerListener);
+        originalActions.values().forEach(items -> items.forEach((item, handler) -> item.setOnAction(handler)));
+        originalActions.clear();
+        for (QuPathViewer viewer : registered) {
+            if (viewer.getView() != null)
+                viewer.getView().setOnContextMenuRequested(null);
+        }
+        registered.clear();
+        viewerByDockable.clear();
+    }
+
     @SuppressWarnings("unchecked")
     private List<Node> getChildrenReflectively(Parent parent) {
         if (parent == null) return new ArrayList<>();
