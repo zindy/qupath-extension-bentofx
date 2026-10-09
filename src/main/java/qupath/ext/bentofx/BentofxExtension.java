@@ -1,6 +1,8 @@
 package qupath.ext.bentofx;
 
 import javafx.application.Platform;
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.geometry.Orientation;
 import javafx.geometry.Side;
 import javafx.scene.Node;
@@ -8,9 +10,14 @@ import javafx.scene.Parent;
 import javafx.scene.Group;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.Button;
+import javafx.scene.control.ContentDisplay;
+import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.ToolBar;
+import javafx.scene.control.Tooltip;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 
@@ -20,6 +27,7 @@ import qupath.fx.dialogs.Dialogs;
 import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.QuPathExtension;
+import qupath.lib.gui.tools.IconFactory;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.gui.viewer.ViewerManager;
 
@@ -62,6 +70,9 @@ public class BentofxExtension implements QuPathExtension {
 	private BentoMenuInterceptor menuInterceptor;
 	private AnalysisPaneToggle analysisToggle;
 	private PaneSizing paneSizing;
+
+	/** True while BentoFX is initialised; the toolbar button follows it. */
+	private final BooleanProperty bentoActive = new SimpleBooleanProperty(false);
 	private CapturedWindows capturedWindows;
 
 	// Remembered so that deactivation can rebuild QuPath's own layout
@@ -77,6 +88,7 @@ public class BentofxExtension implements QuPathExtension {
 		}
 		isInstalled = true;
 		addMenuItem(qupath);
+		addToolbarButton(qupath);
 	}
 
 	private void addMenuItem(QuPathGUI qupath) {
@@ -93,6 +105,26 @@ public class BentofxExtension implements QuPathExtension {
 		MenuItem deactivateItem = new MenuItem("Deactivate BentoFX");
 		deactivateItem.setOnAction(e -> bentoTeardown());
 		menu.getItems().add(deactivateItem);
+	}
+
+	/**
+	 * A magnet button at the right-hand end of QuPath's main toolbar that captures floating windows
+	 * (same as Extensions > BentoFX > Capture floating windows). Only enabled while BentoFX is initialised.
+	 */
+	private void addToolbarButton(QuPathGUI qupath) {
+		ToolBar toolBar = qupath.getToolBar();
+		if (toolBar == null) {
+			logger.warn("QuPath's toolbar is not available; the capture button was not added");
+			return;
+		}
+		Button button = new Button();
+		button.setGraphic(IconFactory.createFontAwesome('\uf076'));   // FontAwesome "magnet"
+		button.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
+		button.setFocusTraversable(false);
+		button.setTooltip(new Tooltip("Capture floating windows into BentoFX\n(initialise BentoFX first)"));
+		button.disableProperty().bind(bentoActive.not());
+		button.setOnAction(e -> bentoCapture());
+		toolBar.getItems().addAll(new Separator(Orientation.VERTICAL), button);
 	}
 
 	/**
@@ -235,6 +267,7 @@ public class BentofxExtension implements QuPathExtension {
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
 
+		bentoActive.set(true);
 		logger.info("BentoFX layout initialised with {} viewer(s)", viewerManager.getAllViewers().size());
 
 	}
@@ -328,6 +361,7 @@ public class BentofxExtension implements QuPathExtension {
 		mainSplitPane = null;
 		analysisTabPane = null;
 		bentoCssUrl = null;
+		bentoActive.set(false);
 
 		// 9. QuPath's handler is back in charge: use it to hide the pane if it was hidden
 		if (!analysisVisible)
