@@ -201,9 +201,24 @@ It outlines all of the classes and pseudo-states used by controls.
     -fx-opacity: 0.3;
 }
 
-/* The "+" (new viewer) button in the tab bar of viewer panels */
+/* The "+" (new viewer) button in the tab bar of viewer panels. The plus is a shape, scaled to the icon
+   size, so change -fx-pref-width/height (both the same) to make it bigger or smaller. */
 .header-pane .add-viewer-button {
-    -fx-font-weight: bold;
+    -fx-padding: 0 8px 0 8px;
+}
+.header-pane .add-viewer-icon {
+    -fx-shape: "M5 0 H7 V5 H12 V7 H7 V12 H5 V7 H0 V5 H5 Z";
+    -fx-background-color: -color-fg-default;
+    -fx-min-width: 12px;
+    -fx-min-height: 12px;
+    -fx-pref-width: 12px;
+    -fx-pref-height: 12px;
+    -fx-max-width: 12px;
+    -fx-max-height: 12px;
+    -fx-opacity: 0.7;
+}
+.header-pane .add-viewer-button:hover .add-viewer-icon {
+    -fx-opacity: 1;
 }
 
 /* The "+" placed right after the last tab: flat, like the tabs themselves */

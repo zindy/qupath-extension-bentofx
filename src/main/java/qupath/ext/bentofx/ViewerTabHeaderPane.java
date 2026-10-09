@@ -4,7 +4,9 @@ import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Tooltip;
+import javafx.scene.layout.Region;
 import software.coley.bentofx.control.HeaderPane;
 import software.coley.bentofx.control.Headers;
 import software.coley.bentofx.layout.container.DockContainerLeaf;
@@ -60,8 +62,13 @@ final class ViewerTabHeaderPane extends HeaderPane {
     /** A "+" button that asks the extension (through the leaf's properties) to add a viewer tab to {@code leaf}. */
     @SuppressWarnings("unchecked")
     static Button newAddButton(DockContainerLeaf leaf, String styleClass) {
-        Button button = new Button("+");
-        button.setEllipsisString("+");
+        // A drawn icon (see .add-viewer-icon in bento.css) rather than a "+" character: a text glyph is
+        // small and its weight depends on the font
+        Region icon = new Region();
+        icon.getStyleClass().add("add-viewer-icon");
+        Button button = new Button();
+        button.setGraphic(icon);
+        button.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
         button.getStyleClass().addAll(styleClass, "add-viewer-button");
         button.setFocusTraversable(false);
         button.setTooltip(new Tooltip("New viewer"));
