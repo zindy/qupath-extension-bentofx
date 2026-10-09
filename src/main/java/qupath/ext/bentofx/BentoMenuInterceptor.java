@@ -351,6 +351,46 @@ public class BentoMenuInterceptor {
         logger.debug(sb.toString());
     }
 
+    /**
+     * Wrap a freshly created viewer in a BentoFX tab: file drops, minimum size, drag group and
+     * title/close tracking, exactly as for a viewer created by splitting. Not yet added to any leaf.
+     */
+    private Dockable newViewerDockable(QuPathViewer newViewer) {
+        Dockable newDockable = builder.dockable();
+        // The title follows the image (see trackViewer / bindTitle); no numbering needed
+        newDockable.setTitle(EMPTY_VIEWER_TITLE);
+
+        Node viewerNode = newViewer.getView();
+        ViewerDragDrop.install(QuPathGUI.getInstance(), viewerNode);
+        PanelFitter.enforceMinSize(viewerNode, PanelFitter.MIN_VIEWER_W, PanelFitter.MIN_VIEWER_H);
+
+        newDockable.setNode(viewerNode);
+        newDockable.setDragGroupMask(DragGroups.VIEWER);
+        trackViewer(newDockable, newViewer);
+        return newDockable;
+    }
+
+    /**
+     * Browser-style "new tab": create a viewer, add it as the last tab of {@code leaf}, select that tab and
+     * make the new viewer the active one (selecting the tab does this, see {@link #onDockEvent}).
+     */
+    public void addViewerTab(DockContainerLeaf leaf) {
+        if (leaf == null || disposed)
+            return;
+        QuPathViewer newViewer = createRegisteredViewer();
+        if (newViewer == null)
+            return;
+        registerViewer(newViewer);
+
+        Dockable newDockable = newViewerDockable(newViewer);
+        if (!leaf.addDockable(newDockable)) {
+            logger.warn("Could not add a new viewer tab to leaf {}", leaf.getIdentifier());
+            return;
+        }
+        leaf.selectDockable(newDockable);   // fires DockableSelected -> activateViewer(newViewer)
+        activateViewer(newViewer);          // explicit as well; a repeated request is harmless
+    }
+
     private void splitBentoViewer(QuPathViewer targetViewer, Orientation splitOrientation) {
         if (targetViewer == null)
             return;
@@ -364,17 +404,7 @@ public class BentoMenuInterceptor {
         logTree("before split");
 
         // 2. Create its BentoFX Dockable
-        Dockable newDockable = builder.dockable();
-        // The title follows the image (see trackViewer / bindTitle); no numbering needed
-        newDockable.setTitle(EMPTY_VIEWER_TITLE);
-    
-        Node viewerNode = newViewer.getView();
-        ViewerDragDrop.install(QuPathGUI.getInstance(), viewerNode);
-        PanelFitter.enforceMinSize(viewerNode, PanelFitter.MIN_VIEWER_W, PanelFitter.MIN_VIEWER_H);
-    
-        newDockable.setNode(viewerNode);
-        newDockable.setDragGroupMask(DragGroups.VIEWER);
-        trackViewer(newDockable, newViewer);
+        Dockable newDockable = newViewerDockable(newViewer);
     
         // 3. Find the leaf containing the calling viewer
         LeafMatch match = findLeafAndParent(rootBranch, targetViewer.getView());

@@ -37,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ResourceBundle;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import software.coley.bentofx.Bento;
@@ -139,6 +140,19 @@ public class BentofxExtension implements QuPathExtension {
 
 		// Build Bento root
 		bento = DragGroups.newBento();
+
+		// Browser-style "+" button for every leaf that holds viewers: a corner fallback here ...
+		// (Both factories must be set before any leaf is built: a leaf creates its header pane in its constructor.)
+		bento.controlsBuilding().setHeaderPaneFactory(leaf -> {
+			leaf.getProperties().put(ViewerTabHeaderPane.ADD_VIEWER_HANDLER,
+					(Consumer<DockContainerLeaf>) l -> {
+						if (menuInterceptor != null)
+							menuInterceptor.addViewerTab(l);
+					});
+			return new ViewerTabHeaderPane(leaf);
+		});
+		// ... and its inline version, right after the last tab
+		bento.controlsBuilding().setHeadersFactory(ViewerTabHeaders::new);
 		bento.placeholderBuilding().setDockablePlaceholderFactory(d -> new Label("Empty Dockable"));
 		bento.placeholderBuilding().setContainerPlaceholderFactory(c -> new Label("Empty Container"));
 
