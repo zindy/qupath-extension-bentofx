@@ -3,6 +3,8 @@ package qupath.ext.bentofx;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
 import javafx.geometry.Orientation;
 import javafx.geometry.Side;
 import javafx.scene.Node;
@@ -24,9 +26,11 @@ import javafx.stage.Window;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.fx.dialogs.Dialogs;
+import qupath.fx.prefs.controlsfx.PropertyItemBuilder;
 import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.QuPathExtension;
+import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.gui.tools.IconFactory;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.gui.viewer.ViewerManager;
@@ -62,6 +66,13 @@ public class BentofxExtension implements QuPathExtension {
 
 	private boolean isInstalled = false;
 
+	/**
+	 * Persistent preference (shown in QuPath's Preferences window): initialise BentoFX automatically when
+	 * QuPath starts. Off by default, since it replaces QuPath's own layout. Read once, at startup.
+	 */
+	private static final BooleanProperty enableOnStartupProperty = PathPrefs.createPersistentPreference(
+			"bentofx.enableOnStartup", false);
+
 	private Bento bento;
 	private DockBuilding builder;
 	private DockContainerBranch rootBranch;
@@ -88,8 +99,61 @@ public class BentofxExtension implements QuPathExtension {
 			return;
 		}
 		isInstalled = true;
+		addPreferenceToPane(qupath);
 		addMenuItem(qupath);
 		addToolbarButton(qupath);
+		enableOnStartupIfRequested(qupath);
+	}
+
+	/**
+	 * Add the "enable on startup" option to QuPath's Preferences window, in its own section.
+	 */
+	private void addPreferenceToPane(QuPathGUI qupath) {
+		var propertyItem = new PropertyItemBuilder<>(enableOnStartupProperty, Boolean.class)
+				.name(resources.getString("pref.enable-on-startup"))
+				.category(EXTENSION_NAME)
+				.description(resources.getString("pref.enable-on-startup.description"))
+				.build();
+		qupath.getPreferencePane()
+				.getPropertySheet()
+				.getItems()
+				.add(propertyItem);
+	}
+
+	/**
+	 * If the preference is set, initialise BentoFX (same as Extensions > BentoFX > Initialisation) as soon
+	 * as QuPath's main window is showing. Extensions are installed while QuPath is still being built, before
+	 * its window exists, and {@link #bentoSetup()} needs the finished GUI, so it can't run directly from here.
+	 */
+	private void enableOnStartupIfRequested(QuPathGUI qupath) {
+		if (!enableOnStartupProperty.get())
+			return;
+		Stage stage = qupath.getStage();
+		if (stage == null || stage.isShowing()) {
+			Platform.runLater(this::autoSetup);
+			return;
+		}
+		stage.showingProperty().addListener(new ChangeListener<Boolean>() {
+			@Override
+			public void changed(ObservableValue<? extends Boolean> obs, Boolean wasShowing, Boolean showing) {
+				if (showing) {
+					obs.removeListener(this);   // once only
+					Platform.runLater(BentofxExtension.this::autoSetup);
+				}
+			}
+		});
+	}
+
+	private void autoSetup() {
+		if (bento != null)
+			return;
+		logger.info("Initialising BentoFX at startup (see the BentoFX extension preferences)");
+		try {
+			bentoSetup();
+		} catch (Exception e) {
+			logger.error("Could not initialise BentoFX at startup", e);
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.startup-failed"));
+		}
 	}
 
 	private void addMenuItem(QuPathGUI qupath) {
