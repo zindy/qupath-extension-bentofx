@@ -217,6 +217,15 @@ public class BentofxExtension implements QuPathExtension {
 		});
 		// ... and its inline version, right after the last tab
 		bento.controlsBuilding().setHeadersFactory(ViewerTabHeaders::new);
+
+		// Drop hint that shows the size a docked panel will really get (read at drag time; PaneSizing is
+		// created later in this method)
+		bento.controlsBuilding().setContentWrapperFactory(leaf -> {
+			leaf.getProperties().put(SizedHintContentWrapper.DROP_EXTENT,
+					(SizedHintContentWrapper.DropExtent) (dockable, horizontal) ->
+							paneSizing != null ? paneSizing.dropExtent(dockable, horizontal) : -1);
+			return new SizedHintContentWrapper(leaf);
+		});
 		bento.placeholderBuilding().setDockablePlaceholderFactory(d -> new Label("Empty Dockable"));
 		bento.placeholderBuilding().setContainerPlaceholderFactory(c -> new Label("Empty Container"));
 

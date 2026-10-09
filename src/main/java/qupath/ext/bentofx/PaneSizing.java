@@ -270,6 +270,22 @@ final class PaneSizing {
         return !ds.isEmpty() && ds.stream().noneMatch(d -> d.getDragGroupMask() == DragGroups.VIEWER);
     }
 
+    /**
+     * Pixels that the pane of {@code dockable} will get along an axis when it is dropped beside another
+     * container, or -1 for a viewer (viewers share the space instead). The drop hint uses this to show the
+     * size the pane will really have. It is the same rule {@code apply()} uses for a new pane: the size of
+     * the window the panel was captured from, else {@link #DEFAULT_FIXED_PX}.
+     */
+    double dropExtent(Dockable dockable, boolean horizontal) {
+        if (dockable.getDragGroupMask() == DragGroups.VIEWER)
+            return -1;
+        double[] wh = declared.get(dockable);
+        double s = wh != null ? (horizontal ? wh[0] : wh[1]) : 0;
+        if (s <= 0)
+            s = DEFAULT_FIXED_PX;
+        return Math.max(s, horizontal ? PanelFitter.MIN_PANEL_W : PanelFitter.MIN_PANEL_H);
+    }
+
     private static double extent(DockContainer c, boolean horizontal) {
         var r = c.asRegion();
         return horizontal ? r.getWidth() : r.getHeight();
