@@ -21,6 +21,7 @@ import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.QuPathExtension;
 import qupath.lib.gui.viewer.QuPathViewer;
+import qupath.lib.gui.viewer.ViewerManager;
 
 import java.net.URL;
 import java.util.ArrayList;
@@ -81,7 +82,7 @@ public class BentofxExtension implements QuPathExtension {
 	private void addMenuItem(QuPathGUI qupath) {
 		var menu = qupath.getMenu("Extensions>" + EXTENSION_NAME, true);
 		
-		MenuItem initItem = new MenuItem("Initialize BentoFX");
+		MenuItem initItem = new MenuItem("Initialisation");
 		initItem.setOnAction(e -> bentoSetup());
 		menu.getItems().add(initItem);
 
@@ -195,7 +196,7 @@ public class BentofxExtension implements QuPathExtension {
 			logger.debug("{}/{} viewers added...", i + 1, viewers.size());
 
 			Dockable dockable = builder.dockable();
-			dockable.setTitle("Viewer " + (i + 1));
+			dockable.setTitle(BentoMenuInterceptor.EMPTY_VIEWER_TITLE);   // replaced by the image name once tracked
 			var v = viewer.getView();
 
 			// Keep QuPath's file drop, but let Bento tab drags through
@@ -283,8 +284,12 @@ public class BentofxExtension implements QuPathExtension {
 			PanelFitter.resetMinSize(viewer.getView());
 		}
 
-		// 4. Viewers: one row in QuPath's own grid. The grid is still its original 1x1 (row 0 holds a stale
-		//    reference to the first viewer); its row SplitPane is reachable through the public region.
+		// 4. Viewers: one row in QuPath's own grid. The grid still has the shape it had before BentoFX was
+		//    initialised (e.g. 2x2), with stale references to viewer nodes that Bento has since taken over.
+		//    Drop every row but the first with the grid's own removeRow(int), which updates its private row
+		//    list, the main SplitPane and the divider bindings (it does not touch the viewers), then fill the
+		//    first row with all viewers.
+		removeExtraGridRows(viewerManager);
 		SplitPane grid = (SplitPane) viewerManager.getRegion();
 		SplitPane row = (SplitPane) grid.getItems().get(0);
 		row.getItems().setAll(viewers.stream().map(QuPathViewer::getView).toList());
@@ -427,6 +432,29 @@ public class BentofxExtension implements QuPathExtension {
 			resources.getString("name"),
 			captured.isEmpty() ? resources.getString("info.no-capture") : resources.getString("info.windows-captured")
 		);
+	}
+
+	/**
+	 * Remove rows 1..n-1 of ViewerManager's private SplitPaneGrid, bottom up. Uses reflection: the grid and
+	 * its removeRow(int) are package-private. If that fails, the extra rows are at least taken off the screen.
+	 */
+	private static void removeExtraGridRows(ViewerManager viewerManager) {
+		SplitPane main = (SplitPane) viewerManager.getRegion();
+		int rows = main.getItems().size();
+		if (rows <= 1)
+			return;
+		try {
+			var field = ViewerManager.class.getDeclaredField("splitPaneGrid");
+			field.setAccessible(true);
+			Object grid = field.get(viewerManager);
+			var removeRow = grid.getClass().getDeclaredMethod("removeRow", int.class);
+			removeRow.setAccessible(true);
+			for (int r = rows - 1; r >= 1; r--)
+				removeRow.invoke(grid, r);
+		} catch (Exception e) {
+			logger.error("Could not remove the extra viewer grid rows; hiding them instead", e);
+			main.getItems().remove(1, main.getItems().size());
+		}
 	}
 
 	/** Bring a docked captured dialog to the front: show its pane, select its tab, focus it. */

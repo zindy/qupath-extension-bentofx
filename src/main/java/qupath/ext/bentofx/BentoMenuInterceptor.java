@@ -1,6 +1,8 @@
 package qupath.ext.bentofx;
 
 import javafx.application.Platform;
+import javafx.beans.InvalidationListener;
+import javafx.beans.WeakInvalidationListener;
 import javafx.beans.value.ChangeListener;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
@@ -16,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.localization.QuPathResources;
+import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.gui.viewer.ViewerManager;
 import software.coley.bentofx.building.DockBuilding;
@@ -46,7 +49,8 @@ public class BentoMenuInterceptor {
 
     private record LeafMatch(DockContainerBranch parentBranch, DockContainerLeaf leaf) {}
 
-    private static final java.util.regex.Pattern VIEWER_TITLE = java.util.regex.Pattern.compile("Viewer (\\d+)");
+    /** Tab title of a viewer that has no image. */
+    static final String EMPTY_VIEWER_TITLE = "New Viewer";
 
     private final Map<Dockable, QuPathViewer> viewerByDockable = new HashMap<>();
 
@@ -77,19 +81,80 @@ public class BentoMenuInterceptor {
     /** Remember which dockable hosts which viewer, so closing the tab can close the viewer. */
     public void trackViewer(Dockable dockable, QuPathViewer viewer) {
         viewerByDockable.put(dockable, viewer);
+        bindTitle(dockable, viewer);
+    }
+
+    private record TitleBinding(QuPathViewer viewer, InvalidationListener listener,
+                                WeakInvalidationListener weakListener) {}
+
+    private final Map<Dockable, TitleBinding> titleBindings = new HashMap<>();
+
+    /**
+     * Keep a viewer tab's title in step with its image: the image name (as QuPath itself displays it, so the
+     * "mask image names" preference is respected) or {@link #EMPTY_VIEWER_TITLE} when there is no image.
+     * Listens to the same things QuPath uses for the title of a detached viewer: the viewer's image data, the
+     * name-masking preference and the project. The listeners on the global properties are weak and are also
+     * removed explicitly when the viewer tab closes or this interceptor is disposed.
+     */
+    private void bindTitle(Dockable dockable, QuPathViewer viewer) {
+        unbindTitle(dockable);
+        InvalidationListener listener = obs -> dockable.setTitle(viewerTitle(viewer));
+        WeakInvalidationListener weak = new WeakInvalidationListener(listener);
+        viewer.imageDataProperty().addListener(listener);
+        PathPrefs.maskImageNamesProperty().addListener(weak);
+        QuPathGUI.getInstance().projectProperty().addListener(weak);
+        titleBindings.put(dockable, new TitleBinding(viewer, listener, weak));
+        dockable.setTitle(viewerTitle(viewer));
+    }
+
+    private void unbindTitle(Dockable dockable) {
+        TitleBinding b = titleBindings.remove(dockable);
+        if (b == null)
+            return;
+        b.viewer().imageDataProperty().removeListener(b.listener());
+        PathPrefs.maskImageNamesProperty().removeListener(b.weakListener());
+        QuPathGUI.getInstance().projectProperty().removeListener(b.weakListener());
+    }
+
+    private static String viewerTitle(QuPathViewer viewer) {
+        var imageData = viewer.getImageData();
+        String name = imageData == null ? null : QuPathGUI.getInstance().getDisplayedImageName(imageData);
+        return name == null || name.isBlank() ? EMPTY_VIEWER_TITLE : name;
     }
 
     /** True while a viewer close is in progress, so tab-selection events don't override its choice of active viewer. */
     private boolean closeInProgress = false;
 
+    /** The viewer most recently asked to become active; older deferred requests are dropped. */
+    private QuPathViewer latestActivation;
+
+    /** True while showViewerTab selects a tab because the active viewer changed (so no re-activation). */
+    private boolean selectingForActiveViewer;
+
     private void activateViewer(QuPathViewer viewer) {
+        latestActivation = viewer;
         ViewerManager vm = QuPathGUI.getInstance().getViewerManager();
         vm.setActiveViewer(viewer);                  // immediate; no-op if already active
         Platform.runLater(() -> {
+            // A deferred request must not override a newer one, nor activate a viewer whose tab is no longer the
+            // selected one (reordering tabs selects several in quick succession). Without these checks, two stale
+            // requests keep re-activating each other's viewer and showViewerTab keeps switching tabs: flicker.
+            if (latestActivation != viewer || !isTabSelected(viewer))
+                return;
             // Real focus last: QuPath's own focus listener treats this as "the active viewer"
             viewer.getView().requestFocus();
             vm.setActiveViewer(viewer);              // in case focus landed elsewhere in between
         });
+    }
+
+    private boolean isTabSelected(QuPathViewer viewer) {
+        if (viewer == null || viewer.getView() == null)
+            return false;
+        LeafMatch match = findLeafAndParent(rootBranch, viewer.getView());
+        if (match == null)
+            return false;
+        Dockable selected = match.leaf().getSelectedDockable();
+        return selected != null && selected.getNode() == viewer.getView();
     }
 
     /** Register with bento.events().addEventListener(...) */
@@ -103,8 +168,12 @@ public class BentoMenuInterceptor {
             QuPathViewer viewer = viewerByDockable.get(selected.dockable());
             logger.debug("Tab selected: '{}' -> viewer {} (closeInProgress={})",
                     selected.dockable().getTitle(), viewer, closeInProgress);
-            if (viewer != null && !closeInProgress)
-                activateViewer(viewer);
+            if (viewer != null) {
+                selected.dockable().setTitle(viewerTitle(viewer));   // e.g. the project entry was renamed
+                // Not when we only selected this tab because the active viewer changed: it is active already
+                if (!closeInProgress && !selectingForActiveViewer)
+                    activateViewer(viewer);
+            }
             return;
         }
             
@@ -158,6 +227,7 @@ public class BentoMenuInterceptor {
         // Don't keep the closed viewer reachable through our bookkeeping
         originalActions.remove(viewer);
         registered.remove(viewer);
+        unbindTitle(closing.dockable());
     }
 
     /**
@@ -192,8 +262,14 @@ public class BentoMenuInterceptor {
         DockContainerLeaf leaf = match.leaf();
         for (Dockable d : leaf.getDockables()) {
             if (d.getNode() == viewer.getView()) {
-                if (leaf.getSelectedDockable() != d)
-                    leaf.selectDockable(d);
+                if (leaf.getSelectedDockable() != d) {
+                    selectingForActiveViewer = true;
+                    try {
+                        leaf.selectDockable(d);
+                    } finally {
+                        selectingForActiveViewer = false;
+                    }
+                }
                 return;
             }
         }
@@ -240,24 +316,6 @@ public class BentoMenuInterceptor {
         children.add(targetIndex, child);
     }
 
-    /**
-    * Smallest positive integer not already used in a "Viewer N" dockable title.
-    * Fills gaps first, then continues from the max.
-    */
-    private int nextViewerNumber() {
-        java.util.Set<Integer> used = new java.util.HashSet<>();
-        for (Dockable d : rootBranch.getDockables()) {
-            String title = d.getTitle();
-            if (title == null) continue;
-            var m = VIEWER_TITLE.matcher(title);
-            if (m.matches())
-                used.add(Integer.parseInt(m.group(1)));
-        }
-        int n = 1;
-        while (used.contains(n))
-            n++;
-        return n;
-    }
 
     private void dumpTree(DockContainer c, String indent, StringBuilder sb) {
         if (c instanceof DockContainerBranch b) {
@@ -307,9 +365,8 @@ public class BentoMenuInterceptor {
 
         // 2. Create its BentoFX Dockable
         Dockable newDockable = builder.dockable();
-        //int viewerNum = QuPathGUI.getInstance().getViewerManager().getAllViewers().size();
-        //newDockable.setTitle("Viewer " + viewerNum);
-        newDockable.setTitle("Viewer " + nextViewerNumber());
+        // The title follows the image (see trackViewer / bindTitle); no numbering needed
+        newDockable.setTitle(EMPTY_VIEWER_TITLE);
     
         Node viewerNode = newViewer.getView();
         ViewerDragDrop.install(QuPathGUI.getInstance(), viewerNode);
@@ -404,6 +461,8 @@ public class BentoMenuInterceptor {
                 viewer.getView().setOnContextMenuRequested(null);
         }
         registered.clear();
+        for (Dockable d : new java.util.ArrayList<>(titleBindings.keySet()))
+            unbindTitle(d);
         viewerByDockable.clear();
     }
 
