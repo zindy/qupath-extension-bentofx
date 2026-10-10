@@ -1,234 +1,236 @@
 /*
-This serves as an example of how you would create a stylesheet for Bento.
-It outlines all of the classes and pseudo-states used by controls.
+ * Stylesheet for the BentoFX layout.
+ *
+ * COLOURS: nothing in here is hard-coded. QuPath's themes (Modena Light / Modena Dark) are plain JavaFX
+ * Modena, and a theme is just a different value of a few "looked-up colours" defined on .root
+ * (-fx-base, -fx-background, ... see QuPath's dark.css). Everything Modena derives from them
+ * (-fx-outer-border, -fx-inner-border, -fx-body-color, -fx-text-box-border, -fx-text-base-color,
+ * -fx-mark-color, -fx-hover-base, -fx-focus-color ...) follows automatically, and so do the rules below,
+ * which use those names exactly like Modena's own TabPane does. Do not redefine them on .root here.
+ *
+ * The tabs copy Modena's TabPane look: rounded tab bodies with a gradient, a darker strip behind them, and
+ * the selected tab flowing into the content below. The "3" in the insets is the gap above the tabs that
+ * Modena has as TabPane padding (a Header cannot be padded, so it is part of the tab's own background).
  */
-.root {
-    -color-base-9: white;
-    -color-base-8: #dddddd;
-    -color-base-7: #d0d0d0;
-    -color-base-6: #c4c4c4;
-    -color-base-5: rgb(170, 170, 170);
-    -color-base-4: #6a6a6a;
-    -color-base-3: #5e5e5e;
-    -color-base-2: #444444;
-    -color-base-1: #373737;
-    -color-base-0: #373737;
-    -color-accent-9: #bddeff;
-    -color-accent-8: #a3d1ff;
-    -color-accent-7: #7abcff;
-    -color-accent-6: #57aaff;
-    -color-accent-5: #3d9eff;
-    -color-accent-4: rgb(10, 132, 255);
-    -color-accent-3: #006bd6;
-    -color-accent-2: #005bb7;
-    -color-accent-1: #00448a;
-    -color-accent-0: #002b57;
-    -color-fg-default: black;
-    -color-fg-muted:  -color-base-1;
-    -color-fg-subtle: -color-base-3;
-    -color-bg-default: -color-base-9;
-    -color-bg-overlay: -color-base-8;
-    -color-bg-subtle: -color-base-6;
-    -color-bg-inset: -color-base-4;
-    -color-border-default: -color-base-3;
-    -color-border-muted: -color-base-4;
-    -color-border-subtle: -color-base-5;
-    -color-accent-fg: -color-accent-8;
-    -color-accent-emphasis: -color-accent-5;
-    -color-accent-muted: -color-accent-2;
-    -color-accent-subtle: -color-accent-0;
-    -fx-background-color: -color-bg-default;
-}
 
-.container-leaf {}
-.container-branch {}
-.container-branch:root {}
+/* ------------------------------------------------------------------ containers & dividers */
 .container-branch {
     -fx-background-insets: 0;
     -fx-padding: 0;
 }
 .container-branch > .split-pane-divider {
-    -fx-background-color: -color-bg-inset !important;
+    -fx-background-color: -fx-text-box-border !important;
     -fx-padding: 0 2px 0 2px;
 }
 .container-branch > .split-pane-divider > .horizontal-grabber {
-    -fx-background-color: -color-bg-subtle;
+    -fx-background-color: derive(-fx-text-box-border, 30%);
     -fx-padding: 5px 1px 5px 1px;
 }
 .container-branch > .split-pane-divider > .vertical-grabber {
-    -fx-background-color: -color-bg-subtle;
+    -fx-background-color: derive(-fx-text-box-border, 30%);
     -fx-padding: 1px 5px 1px 5px;
 }
-.container-branch > .split-pane-divider:hover {}
-.container-branch > .split-pane-divider:pressed {}
-.container-branch > .split-pane-divider:disabled {}
-.container-branch > .split-pane-divider:hover> .horizontal-grabber,
-.container-branch > .split-pane-divider:hover> .vertical-grabber {
-    -fx-background-color: -color-accent-emphasis;
+.container-branch > .split-pane-divider:hover > .horizontal-grabber,
+.container-branch > .split-pane-divider:hover > .vertical-grabber {
+    -fx-background-color: -fx-focus-color;
 }
 .container-branch > .split-pane-divider:pressed > .horizontal-grabber,
 .container-branch > .split-pane-divider:pressed > .vertical-grabber {
-    -fx-background-color: -color-accent-fg;
+    -fx-background-color: derive(-fx-focus-color, 30%);
 }
 
-/* HeaderPane */
+/* ------------------------------------------------------------------ HeaderPane (tab bar + content) */
 .header-pane {
     -fx-background-insets: 0, 1px;
-    -fx-background-color: -color-border-default, -color-bg-default;
+    -fx-background-color: -fx-outer-border, -fx-background;
 }
-/* The "x" button on closable headers */
+
+/* The strip behind the tabs (tabs + corner buttons): Modena's .tab-header-background */
+.header-pane .header-region-wrapper {
+    -fx-background-color:
+        -fx-outer-border,
+        -fx-text-box-border,
+        linear-gradient(from 0px 0px to 0px 5px, -fx-text-box-border, derive(-fx-text-box-border, 30%));
+}
+.header-pane:top .header-region-wrapper {
+    -fx-background-insets: 0, 0 0 1 0, 1;
+}
+.header-pane:bottom .header-region-wrapper {
+    -fx-background-insets: 0, 1 0 0 0, 1;
+    -fx-background-color:
+        -fx-outer-border,
+        -fx-text-box-border,
+        linear-gradient(from 0px 5px to 0px 0px, -fx-text-box-border, derive(-fx-text-box-border, 30%));
+}
+.header-pane:left .header-region-wrapper {
+    -fx-background-insets: 0, 0 1 0 0, 1;
+}
+.header-pane:right .header-region-wrapper {
+    -fx-background-insets: 0, 0 0 0 1, 1;
+}
+/* ... which is painted by the wrapper, so these are see-through */
+.header-region {
+    -fx-background-color: transparent;
+}
+.button-bar {
+    -fx-spacing: 0;
+    -fx-padding: 0;
+    -fx-background-color: transparent;
+}
+
+/* ------------------------------------------------------------------ tabs (Header) */
+/* Modena's .tab, with the extra gap above the tabs (see top of file) */
+.header:top {
+    -fx-background-color: -fx-outer-border, -fx-inner-border, -fx-body-color;
+    -fx-background-insets: 3 1 1 0, 4 2 1 1, 5 3 1 2;
+    -fx-background-radius: 3 3 0 0, 2 2 0 0, 1 1 0 0;
+}
+.header:bottom {
+    -fx-background-color: -fx-outer-border, -fx-inner-border-bottomup, -fx-body-color-bottomup;
+    -fx-background-insets: 1 1 3 0, 1 2 4 1, 1 3 5 2;
+    -fx-background-radius: 0 0 3 3, 0 0 2 2, 0 0 1 1;
+}
+.header:left, .header:right {
+    -fx-background-color: -fx-outer-border, -fx-inner-border, -fx-body-color;
+    -fx-background-insets: 0 0 1 0, 1 1 2 1, 2 2 3 2;
+}
+.header:hover {
+    -fx-color: -fx-hover-base;
+}
+
+/* No gap between grid cells: spacing comes from the elements themselves */
+.header:top GridPane,
+.header:bottom GridPane {
+    -fx-hgap: 0;
+    -fx-padding: 6px 8px 6px 8px;
+}
+
+/* Icon-to-text gap (the icon's Label is unmanaged, so this is free when there's no icon) */
+.header:top GridPane > Pane > Label,
+.header:bottom GridPane > Pane > Label {
+    -fx-padding: 0 6px 0 0;
+}
+
+/* The title is a bare Text node (not a Label): it takes -fx-fill, which is black unless set, and has no style
+   class of its own, so ThemedHeader gives it .header-title. Like Modena's tabs, its colour is chosen for the
+   tab's own colour, so it is light on a dark theme */
+.header Text {
+    -fx-fill: -fx-text-base-color;
+}
+
+/* The selected tab flows into the content: no bottom border, and the content's own background */
+.header:selected:top {
+    -fx-background-color: -fx-outer-border, -fx-inner-border, -fx-background;
+    -fx-background-insets: 3 1 0 0, 4 2 0 1, 5 3 0 2;
+}
+.header:selected:bottom {
+    -fx-background-color: -fx-outer-border, -fx-inner-border-bottomup, -fx-background;
+    -fx-background-insets: 0 1 3 0, 0 2 4 1, 0 3 5 2;
+}
+.header:selected:left, .header:selected:right {
+    -fx-background-color: -fx-outer-border, -fx-inner-border, -fx-background;
+}
+/* The pane that has the focus draws the selected tab's outline in the focus colour */
+.header-pane:active .header:selected:top {
+    -fx-background-color: -fx-focus-color, -fx-inner-border, -fx-background;
+}
+.header-pane:active .header:selected:bottom {
+    -fx-background-color: -fx-focus-color, -fx-inner-border-bottomup, -fx-background;
+}
+.header-pane:active .header:selected:left,
+.header-pane:active .header:selected:right {
+    -fx-background-color: -fx-focus-color, -fx-inner-border, -fx-background;
+}
+
+/* The "x" on closable tabs */
 .header-pane .close-button {
     -fx-effect: none;
-    -fx-opacity: 0.5;
-    -fx-background-insets: 0;
+    -fx-opacity: 0.6;
+    -fx-background-insets: 0 0 0 6px;
     -fx-background-radius: 50px;
     -fx-background-color: transparent;
     -fx-border-width: 0px;
-    -fx-padding: 0 2px 0 2px;
-}
-.header-pane .header:selected .close-button:hover {
-    -fx-background-color: -color-bg-subtle;
+    -fx-padding: 0 2px 0 8px;   /* left padding = gap between title and the x */
+    -fx-translate-y: 2px; /* Move down 2px */
 }
 .header-pane .header .close-button:hover {
-    -fx-background-color: -color-bg-default;
+    -fx-opacity: 1;
+    -fx-background-color: derive(-fx-color, -15%);
 }
-/* The "▼" and "≡" buttons in HeaderView */
-.header-pane .corner-button {
+
+/* ------------------------------------------------------------------ buttons in the strip */
+/* "▼" (tab list), "≡" (menu) and "+" (new viewer): flat, and raised like a hovered tab on mouse over */
+.header-pane .corner-button,
+.header-pane .add-viewer-button {
     -fx-effect: none;
-    -fx-background-insets: 0, 1px;
-    -fx-background-radius: 0px;
-    -fx-background-color: -color-border-default, -color-bg-overlay;
+    -fx-background-radius: 0;
+    -fx-background-insets: 0;
+    -fx-background-color: transparent;
     -fx-border-width: 0px;
 }
-.header-pane .corner-button:hover {
-    -fx-background-color: -color-border-default, -color-bg-default;
+.header-pane:top .corner-button:hover,
+.header-pane:top .add-viewer-button:hover {
+    -fx-color: -fx-hover-base;
+    -fx-background-color: -fx-outer-border, -fx-inner-border, -fx-body-color;
+    -fx-background-insets: 3 0 1 0, 4 1 1 1, 5 2 1 2;
+    -fx-background-radius: 3 3 0 0, 2 2 0 0, 1 1 0 0;
 }
-.header-pane:top .corner-button {
-    -fx-background-insets: 0, 0 0 1px 1px;
+.header-pane:bottom .corner-button:hover,
+.header-pane:bottom .add-viewer-button:hover {
+    -fx-color: -fx-hover-base;
+    -fx-background-color: -fx-outer-border, -fx-inner-border-bottomup, -fx-body-color-bottomup;
+    -fx-background-insets: 1 0 3 0, 1 1 4 1, 1 2 5 2;
+    -fx-background-radius: 0 0 3 3, 0 0 2 2, 0 0 1 1;
 }
-.header-pane:bottom .corner-button {
-    -fx-background-insets: 0, 1px 0 0 1px;
-}
-.header-pane:left .corner-button {
-    -fx-background-insets: 0, 1px 1px 0 0;
-}
-.header-pane:right .corner-button {
-    -fx-background-insets: 0, 1px 0 0 1px;
-}
-.button-bar {
-    -fx-spacing: -1;
-    -fx-padding: 0;
-    -fx-background-color: -color-border-default, -color-bg-default;
-}
-.button-bar:vertical {
-    -fx-fill-height: true;
-}
-.button-bar:horizontal {
-    -fx-fill-width: true;
+.header-pane:left .corner-button:hover,
+.header-pane:left .add-viewer-button:hover,
+.header-pane:right .corner-button:hover,
+.header-pane:right .add-viewer-button:hover {
+    -fx-color: -fx-hover-base;
+    -fx-background-color: -fx-outer-border, -fx-inner-border, -fx-body-color;
+    -fx-background-insets: 0, 1, 2;
 }
 
-/* HeaderRegion (Wrapper) */
-.header-region-wrapper {}
-.header-pane:top .header-region-wrapper {}
-.header-pane:bottom .header-region-wrapper {}
-.header-pane:left .header-region-wrapper {}
-.header-pane:right .header-region-wrapper {}
-
-/* HeaderRegion */
-.header-region {
-    -fx-background-color: -color-border-default, -color-bg-overlay;
+/*
+ * The "+" button: its plus is a shape, scaled to the icon size, so change -fx-pref-width/height (both the
+ * same) to make it bigger or smaller. -fx-mark-color is what Modena uses for check marks and the tab close
+ * button: dark on a light theme, light on a dark one. The padding keeps the plus in the middle of the tab
+ * body (the gap above the tabs is 3, the line below 1).
+ */
+.header-pane:top .add-viewer-button {
+    -fx-padding: 3px 8px 1px 8px;
 }
-.header-region:top {
-    -fx-background-insets: 0, 0 0 1px 0;
+.header-pane:bottom .add-viewer-button {
+    -fx-padding: 1px 8px 3px 8px;
 }
-.header-region:bottom {
-    -fx-background-insets: 0, 1px 0 0 0;
-}
-.header-region:left {
-    -fx-background-insets: 0, 0 1px 0 0;
-}
-.header-region:right {
-    -fx-background-insets: 0, 0 0 0 1px;
-}
-.header-region .node-wrapper {}
-
-/* Header */
-.header {
-    -fx-background-color: -color-border-default, -color-bg-overlay;
-}
-.header:top {
-    -fx-background-insets: 0, 0 0 1px 0;
-}
-.header:bottom {
-    -fx-background-insets: 0, 1px 0 0 0;
-}
-.header:left {
-    -fx-background-insets: 0, 0 1px 0 0;
-}
-.header:right {
-    -fx-background-insets: 0, 0 0 0 1px;
-}
-.header:hover {
-    -fx-background-color: -color-border-subtle, -color-bg-subtle;
-}
-.header-pane .header:selected {
-    -fx-background-color: -color-bg-inset, -color-bg-default;
-}
-.header-pane:active .header:selected {
-    -fx-background-color: -color-accent-4, -color-bg-default;
-}
-.header:selected:top {
-    -fx-background-insets: 0, 0 0 2px 0;
-}
-.header:selected:bottom {
-    -fx-background-insets: 0, 2px 0 0 0;
-}
-.header:selected:left {
-    -fx-background-insets: 0, 0 2px 0 0;
-}
-.header:selected:right {
-    -fx-background-insets: 0, 0 0 0 2px;
-}
-
-/* Collapsed */
-.container:collapsed .header { -fx-background-color: -color-bg-subtle; }
-.container:collapsed .header-pane { -fx-background-color: -color-bg-subtle; }
-.container:collapsed .header-region { -fx-background-color: -color-bg-subtle; }
-.container:collapsed .corner-button { -fx-background-color: -color-bg-subtle; }
-
-/* Misc */
-.dock-ghost-zone {
-    -fx-opacity: 0.3;
-}
-
-/* The "+" (new viewer) button in the tab bar of viewer panels. The plus is a shape, scaled to the icon
-   size, so change -fx-pref-width/height (both the same) to make it bigger or smaller. */
-.header-pane .add-viewer-button {
-    -fx-padding: 0 8px 0 8px;
+.header-pane:left .add-viewer-button,
+.header-pane:right .add-viewer-button {
+    -fx-padding: 4px 8px 4px 8px;
 }
 .header-pane .add-viewer-icon {
     -fx-shape: "M5 0 H7 V5 H12 V7 H7 V12 H5 V7 H0 V5 H5 Z";
-    -fx-background-color: -color-fg-default;
+    -fx-background-color: -fx-mark-color;
     -fx-min-width: 12px;
     -fx-min-height: 12px;
     -fx-pref-width: 12px;
     -fx-pref-height: 12px;
     -fx-max-width: 12px;
     -fx-max-height: 12px;
-    -fx-opacity: 0.7;
+    -fx-opacity: 0.75;
 }
 .header-pane .add-viewer-button:hover .add-viewer-icon {
     -fx-opacity: 1;
 }
 
-/* The "+" placed right after the last tab: flat, like the tabs themselves */
-.header-pane .inline-add-button {
-    -fx-effect: none;
-    -fx-background-insets: 0;
-    -fx-background-radius: 0;
-    -fx-background-color: transparent;
-    -fx-border-width: 0px;
+/* ------------------------------------------------------------------ collapsed containers */
+.container:collapsed .header,
+.container:collapsed .header-pane,
+.container:collapsed .header-region,
+.container:collapsed .corner-button {
+    -fx-background-color: -fx-text-box-border;
 }
-.header-pane .inline-add-button:hover {
-    -fx-background-color: -color-bg-subtle;
+
+/* ------------------------------------------------------------------ misc */
+.dock-ghost-zone {
+    -fx-opacity: 0.3;
 }
