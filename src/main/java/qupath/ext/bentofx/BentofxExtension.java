@@ -217,6 +217,8 @@ public class BentofxExtension implements QuPathExtension {
 		});
 		// ... and its inline version, right after the last tab
 		bento.controlsBuilding().setHeadersFactory(ViewerTabHeaders::new);
+		// Tabs with a themed, evenly spaced title (see ThemedHeader)
+		bento.controlsBuilding().setHeaderFactory((dockable, pane) -> new ThemedHeader(dockable, pane).withDragDrop());
 
 		// Drop hint that shows the size a docked panel will really get (read at drag time; PaneSizing is
 		// created later in this method)
@@ -390,6 +392,20 @@ public class BentofxExtension implements QuPathExtension {
 		collectLeaves(rootBranch, leaves);
 		if (analysisToggle.hiddenHost() != null)
 			collectLeaves(analysisToggle.hiddenHost(), leaves);   // analysis pane currently hidden
+		// Tabs that were dragged out of the main window live in windows BentoFX opened itself, each with a root of
+		// its own. Their content has to be released too: it is bound to those windows, and is taken back below.
+		List<Stage> floatingStages = new ArrayList<>();
+		for (var floatingRoot : new ArrayList<>(bento.getRootContainers())) {
+			if (floatingRoot.equals(rootBranch))
+				continue;
+			var floatingScene = floatingRoot.getScene();
+			if (floatingScene != null && floatingScene.getWindow() instanceof Stage floatingStage
+					&& floatingStage != qupath.getStage()) {
+				collectLeaves(floatingRoot, leaves);
+				if (!floatingStages.contains(floatingStage))
+					floatingStages.add(floatingStage);
+			}
+		}
 		for (DockContainerLeaf leaf : leaves)
 			leaf.selectDockable(null);
 
@@ -429,6 +445,12 @@ public class BentofxExtension implements QuPathExtension {
 		mainSplitPane.setOnDragDropped(null);
 		mainSplitPane.getItems().setAll(analysisTabPane, viewerManager.getRegion());
 		mainSplitPane.setDividerPosition(0, total > 0 ? Math.min(analysisWidth / total, 0.5) : 0.15);
+
+		// 6b. Close the windows BentoFX opened for dragged-out tabs: everything they showed (viewers, captured
+		//     dialogs) has been taken back above, so only an empty shell is left. hide(), not close(): a close
+		//     request makes BentoFX close, and so remove, the tabs it still lists.
+		for (Stage floatingStage : floatingStages)
+			floatingStage.hide();
 
 		// 7. Stylesheet
 		var scene = qupath.getStage().getScene();
