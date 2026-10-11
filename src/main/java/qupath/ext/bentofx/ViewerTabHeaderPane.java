@@ -7,6 +7,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import software.coley.bentofx.control.HeaderPane;
 import software.coley.bentofx.control.Headers;
 import software.coley.bentofx.layout.container.DockContainerLeaf;
@@ -43,6 +44,25 @@ final class ViewerTabHeaderPane extends HeaderPane {
         all[0] = createCornerAddButton();
         System.arraycopy(bento, 0, all, 1, bento.length);
         return all;
+    }
+
+    /**
+     * The tab list button, drawn like Modena's own (see ".list-button" in bento.css) instead of a "▼" character:
+     * a round body with a down arrow. A character cannot have a body of its own, and cannot be coloured and
+     * shaped like Modena's. The click behaviour (the menu of tabs) is BentoFX's own.
+     */
+    @Override
+    protected Button createDockableListButton() {
+        // Called from the super constructor: no instance state may be used here
+        Button button = super.createDockableListButton();
+        Region arrow = new Region();
+        arrow.getStyleClass().add("list-button-arrow");
+        StackPane icon = new StackPane(arrow);
+        icon.getStyleClass().add("list-button-icon");
+        button.setText(null);
+        button.setGraphic(icon);
+        button.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
+        return button;
     }
 
     private Button createCornerAddButton() {

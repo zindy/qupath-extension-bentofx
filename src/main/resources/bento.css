@@ -72,10 +72,32 @@
 .header-region {
     -fx-background-color: transparent;
 }
+/* The buttons sit on top of the tabs, which are not clipped and slide underneath when there are too many:
+   like Modena's control buttons, the bar paints the strip's background itself (same layers as the wrapper
+   above, but no inset at the sides, so there is no seam) to hide them */
 .button-bar {
     -fx-spacing: 0;
     -fx-padding: 0;
-    -fx-background-color: transparent;
+    -fx-background-color:
+        -fx-outer-border,
+        -fx-text-box-border,
+        linear-gradient(from 0px 0px to 0px 5px, -fx-text-box-border, derive(-fx-text-box-border, 30%));
+}
+.header-pane:top .button-bar {
+    -fx-background-insets: 0, 0 0 1 0, 1 0 1 0;
+}
+.header-pane:bottom .button-bar {
+    -fx-background-insets: 0, 1 0 0 0, 1 0 1 0;
+    -fx-background-color:
+        -fx-outer-border,
+        -fx-text-box-border,
+        linear-gradient(from 0px 5px to 0px 0px, -fx-text-box-border, derive(-fx-text-box-border, 30%));
+}
+.header-pane:left .button-bar {
+    -fx-background-insets: 0, 0 1 0 0, 1 1 0 1;
+}
+.header-pane:right .button-bar {
+    -fx-background-insets: 0, 0 0 0 1, 1 0 0 1;
 }
 
 /* ------------------------------------------------------------------ tabs (Header) */
@@ -220,6 +242,58 @@
 }
 .header-pane .add-viewer-button:hover .add-viewer-icon {
     -fx-opacity: 1;
+}
+
+/*
+ * The tab list button ("▼", shown when the tabs do not all fit): Modena's .tab-down-button. A round body with
+ * the same three layers as a Modena tab (outer border, inner border, body), and the down arrow drawn with
+ * Modena's own shape. ViewerTabHeaderPane builds it as a button holding .list-button-icon > .list-button-arrow,
+ * instead of a "▼" character. All colours are looked-up ones, so it follows the theme; -fx-color is what
+ * changes on hover and press, exactly as in Modena. To resize the circle, change the six width/height lines.
+ */
+.header-pane:top .list-button {
+    -fx-padding: 3px 6px 1px 6px;
+}
+.header-pane:bottom .list-button {
+    -fx-padding: 1px 6px 3px 6px;
+}
+.header-pane:left .list-button,
+.header-pane:right .list-button {
+    -fx-padding: 4px 6px 4px 6px;
+}
+/* the circle is the icon, so the button behind it must not also raise like a hovered tab */
+.header-pane .list-button:hover,
+.header-pane:top .list-button:hover,
+.header-pane:bottom .list-button:hover,
+.header-pane:left .list-button:hover,
+.header-pane:right .list-button:hover {
+    -fx-background-color: transparent;
+}
+.header-pane .list-button-icon {
+    -fx-background-color: -fx-outer-border, -fx-inner-border, -fx-body-color;
+    -fx-background-insets: 0, 1, 2;
+    -fx-background-radius: 10, 9, 8;
+    -fx-min-width: 18px;
+    -fx-min-height: 18px;
+    -fx-pref-width: 18px;
+    -fx-pref-height: 18px;
+    -fx-max-width: 18px;
+    -fx-max-height: 18px;
+}
+.header-pane .list-button:hover .list-button-icon {
+    -fx-color: -fx-hover-base;
+}
+.header-pane .list-button:pressed .list-button-icon {
+    -fx-color: -fx-pressed-base;
+}
+/* Padding 2 4 2 4 around a shape with no content: the arrow is 8 x 4, as in Modena */
+.header-pane .list-button-arrow {
+    -fx-background-color: -fx-mark-highlight-color, -fx-mark-color;
+    -fx-background-insets: 0 0 -1 0, 0;
+    -fx-padding: 2px 4px 2px 4px;
+    -fx-shape: "M 0 0 h 7 l -3.5 4 z";
+    -fx-max-width: 8px;
+    -fx-max-height: 4px;
 }
 
 /* ------------------------------------------------------------------ collapsed containers */
