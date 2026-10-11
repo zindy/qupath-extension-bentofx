@@ -100,6 +100,7 @@ final class CapturedWindows {
         final PanelFitter.Fitted fitted;
         final double originalOpacity;
         ChangeListener<Boolean> showListener;
+        ContextHelpBridge helpBridge;   // only for QuPath's Context help window
 
         Entry(Dockable dockable, Stage stage, Parent originalRoot, PanelFitter.Fitted fitted) {
             this.dockable = dockable;
@@ -147,6 +148,11 @@ final class CapturedWindows {
         };
         stage.showingProperty().addListener(e.showListener);
         entries.put(dockable, e);
+
+        // QuPath's Context help window only reacts to the mouse while its own Stage is showing
+        e.helpBridge = ContextHelpBridge.create(stage, dockedNode);
+        if (e.helpBridge != null)
+            e.helpBridge.install();
     }
 
     private void hideWhenIdle(Entry e) {
@@ -229,6 +235,8 @@ final class CapturedWindows {
         if (e == null)
             return;
         e.stage.showingProperty().removeListener(e.showListener);
+        if (e.helpBridge != null)
+            e.helpBridge.dispose();
         e.fitted.node().removeEventHandler(KeyEvent.KEY_PRESSED, KEY_GUARD);
         try {
             e.fitted.undo().run();                       // re-create the original node hierarchy
