@@ -10,12 +10,15 @@ import javafx.geometry.Orientation;
 import javafx.geometry.Side;
 import javafx.scene.Node;
 import javafx.scene.Parent;
+import javafx.scene.Scene;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
+import javafx.stage.Stage;
 import javafx.stage.Window;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.localization.QuPathResources;
 import qupath.lib.gui.prefs.PathPrefs;
@@ -34,14 +37,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.ResourceBundle;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
- * Intercepts native QuPath viewer context menus and redirects multiview actions
- * (addRow/addColumn) to BentoFX layout operations.
+ * Intercepts QuPath's multi-view menu items (in the viewer context menu and in the View menu) and redirects
+ * them to BentoFX: add row/column split the pane, close/detach/attach act on BentoFX panes, and the fixed-grid
+ * items (grid sizes, remove row/column, reset sizes), which only make sense for QuPath's own grid, tell the
+ * user they are not implemented instead of silently creating viewers in a grid that is no longer shown.
  */
 public class BentoMenuInterceptor {
 
     private static final Logger logger = LoggerFactory.getLogger(BentoMenuInterceptor.class);
+    private static final ResourceBundle resources = ResourceBundle.getBundle("qupath.ext.bentofx.ui.strings");
 
     private final DockBuilding builder;
     private final DockContainerBranch rootBranch;
@@ -61,6 +70,9 @@ public class BentoMenuInterceptor {
     private final Map<QuPathViewer, Map<MenuItem, EventHandler<ActionEvent>>> originalActions =
             new java.util.IdentityHashMap<>();
 
+    /** Same as {@link #originalActions}, for the items of QuPath's own View > Multi-view menu. */
+    private final Map<MenuItem, EventHandler<ActionEvent>> menuBarOriginals = new java.util.IdentityHashMap<>();
+
     /** Viewers whose onContextMenuRequested we set (QuPath itself leaves it null). */
     private final java.util.Set<QuPathViewer> registered =
             java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
@@ -76,6 +88,7 @@ public class BentoMenuInterceptor {
         this.defaultViewerLeaf = defaultViewerLeaf;
 
         QuPathGUI.getInstance().getViewerManager().activeViewerProperty().addListener(activeViewerListener);
+        rebindMenuBar();
     }
 
     /** Remember which dockable hosts which viewer, so closing the tab can close the viewer. */
@@ -163,6 +176,10 @@ public class BentoMenuInterceptor {
             return;
         logger.trace("Dock event: {}", event.getClass().getSimpleName());
 
+        // A pane left the main window (e.g. a tab was dragged out): see whether it was the last viewer there
+        if (event instanceof DockEvent.DockableRemoved)
+            scheduleViewerAreaCheck();
+
         // Tab clicked (or otherwise selected): make its viewer the active one
         if (event instanceof DockEvent.DockableSelected selected) {
             QuPathViewer viewer = viewerByDockable.get(selected.dockable());
@@ -185,6 +202,19 @@ public class BentoMenuInterceptor {
 
         QuPathGUI qupath = QuPathGUI.getInstance();
         ViewerManager vm = qupath.getViewerManager();
+
+        // 0. QuPath always needs a viewer, and the main window keeps one: keep the pane of the last one
+        //    (of all, or in the main window) and close only its image
+        if (viewerByDockable.size() <= 1) {
+            closing.cancel();
+            closeImageOnly(viewer, "info.last-viewer");
+            return;
+        }
+        if (isOnlyViewerInMain(closing.dockable())) {
+            closing.cancel();
+            closeImageOnly(viewer, "info.last-main-viewer");
+            return;
+        }
 
         // 1. Prompts to save changes; false means the user cancelled
         if (!qupath.closeViewer(viewer)) {
@@ -231,25 +261,71 @@ public class BentoMenuInterceptor {
     }
 
     /**
-     * Attaches a listener to a viewer so its right-click menu actions 
-     * use BentoFX splitting instead of QuPath's SplitPaneGrid.
+     * Attaches a listener to a viewer so its right-click menu actions
+     * use BentoFX instead of QuPath's SplitPaneGrid.
      */
     public void registerViewer(QuPathViewer viewer) {
         if (viewer == null || viewer.getView() == null) return;
         registered.add(viewer);
 
-        String addRowText = QuPathResources.getString("Action.View.Multiview.addRow");
-        String addColText = QuPathResources.getString("Action.View.Multiview.addColumn");
-
         viewer.getView().setOnContextMenuRequested(event -> {
             Platform.runLater(() -> {
                 for (Window window : Window.getWindows()) {
                     if (window instanceof ContextMenu menu && menu.isShowing()) {
-                        rebindMenuItems(menu.getItems(), addRowText, addColText, viewer);
+                        rebindMenuItems(menu.getItems(),
+                                originalActions.computeIfAbsent(viewer, v -> new java.util.IdentityHashMap<>()),
+                                () -> viewer, true);
                     }
                 }
             });
         });
+    }
+
+    /** Menu text (QuPath's own localised strings) -> what BentoFX does instead, given the viewer concerned. */
+    private Map<String, Consumer<QuPathViewer>> menuActions() {
+        Map<String, Consumer<QuPathViewer>> m = new HashMap<>();
+        Consumer<QuPathViewer> noGrid = v -> notifyInfo("info.grid-not-implemented");
+        Consumer<QuPathViewer> noRemove = v -> notifyInfo("info.remove-not-implemented");
+        putIfKnown(m, "Action.View.Multiview.addRow", this::addBentoRow);
+        putIfKnown(m, "Action.View.Multiview.addColumn", this::addBentoColumn);
+        putIfKnown(m, "Action.View.Multiview.removeRow", noRemove);
+        putIfKnown(m, "Action.View.Multiview.removeColumn", noRemove);
+        putIfKnown(m, "Action.View.Multiview.resetGridSize", v -> notifyInfo("info.reset-sizes-not-implemented"));
+        putIfKnown(m, "Action.View.Multiview.closeViewer", this::closeBentoViewer);
+        for (String key : new String[] {"grid1x1", "grid1x2", "grid2x1", "grid2x2", "grid3x3"})
+            putIfKnown(m, "ViewerActions." + key, noGrid);
+        putIfKnown(m, "ViewerActions.detachViewer", this::detachBentoViewer);
+        putIfKnown(m, "ViewerActions.attachViewer", this::attachBentoViewer);
+        return m;
+    }
+
+    private static void putIfKnown(Map<String, Consumer<QuPathViewer>> m, String resourceKey, Consumer<QuPathViewer> action) {
+        try {
+            m.put(QuPathResources.getString(resourceKey), action);
+        } catch (Exception e) {
+            logger.debug("QuPath has no string '{}'; that menu item is left alone", resourceKey);
+        }
+    }
+
+    private static void notifyInfo(String key) {
+        Dialogs.showInfoNotification(resources.getString("name"), resources.getString(key));
+    }
+
+    /** The same redirection for QuPath's own View > Multi-view menu, which acts on the active viewer. */
+    private void rebindMenuBar() {
+        try {
+            QuPathGUI qupath = QuPathGUI.getInstance();
+            Menu menu = qupath.getMenu(QuPathResources.getString("Menu.View") + ">"
+                    + QuPathResources.getString("Menu.View.Multiview"), false);
+            if (menu == null) {
+                logger.debug("View > Multi-view menu not found; only the viewer context menu is redirected");
+                return;
+            }
+            rebindMenuItems(menu.getItems(), menuBarOriginals,
+                    () -> qupath.getViewerManager().getActiveViewer(), false);
+        } catch (Exception e) {
+            logger.warn("Could not redirect the View > Multi-view menu", e);
+        }
     }
 
     /** Bring the tab hosting this viewer to the front, if it isn't already. */
@@ -275,17 +351,48 @@ public class BentoMenuInterceptor {
         }
     }
 
-    private void rebindMenuItems(List<MenuItem> items, String targetRowText, String targetColText, QuPathViewer viewer) {
+    /**
+     * Replace the handler of every known multi-view item (recursing into submenus), remembering the original
+     * in {@code originals} so that {@link #dispose()} can put it back.
+     *
+     * @param contextMenu true for a viewer's context menu: QuPath shows "Detach" or "Attach" there by asking
+     *                    its own grid, which knows nothing of BentoFX panes, so show the one that applies.
+     */
+    private void rebindMenuItems(List<MenuItem> items, Map<MenuItem, EventHandler<ActionEvent>> originals,
+                                 Supplier<QuPathViewer> viewer, boolean contextMenu) {
+        Map<String, Consumer<QuPathViewer>> actions = menuActions();
+        String detachText = textOf("ViewerActions.detachViewer");
+        String attachText = textOf("ViewerActions.attachViewer");
+        rebind(items, originals, viewer, actions, contextMenu, detachText, attachText);
+    }
+
+    private void rebind(List<MenuItem> items, Map<MenuItem, EventHandler<ActionEvent>> originals,
+                        Supplier<QuPathViewer> viewer, Map<String, Consumer<QuPathViewer>> actions,
+                        boolean contextMenu, String detachText, String attachText) {
         for (MenuItem item : items) {
-            if (item instanceof Menu subMenu) {
-                rebindMenuItems(subMenu.getItems(), targetRowText, targetColText, viewer);
-            } else if (targetRowText.equals(item.getText())) {
-                rememberOriginal(viewer, item);
-                item.setOnAction(e -> addBentoRow(viewer));
-            } else if (targetColText.equals(item.getText())) {
-                rememberOriginal(viewer, item);
-                item.setOnAction(e -> addBentoColumn(viewer));
+            if (item instanceof Menu subMenu)
+                rebind(subMenu.getItems(), originals, viewer, actions, contextMenu, detachText, attachText);
+            Consumer<QuPathViewer> action = item instanceof Menu ? null : actions.get(item.getText());
+            if (action == null)
+                continue;
+            if (!originals.containsKey(item))
+                originals.put(item, item.getOnAction());   // first call sees QuPath's own handler
+            item.setOnAction(e -> action.accept(viewer.get()));
+            if (contextMenu && viewer.get() != null) {
+                boolean floating = isFloating(viewer.get());
+                if (item.getText().equals(detachText))
+                    item.setVisible(!floating);
+                else if (item.getText().equals(attachText))
+                    item.setVisible(floating);
             }
+        }
+    }
+
+    private static String textOf(String resourceKey) {
+        try {
+            return QuPathResources.getString(resourceKey);
+        } catch (Exception e) {
+            return "";
         }
     }
 
@@ -295,6 +402,193 @@ public class BentoMenuInterceptor {
 
     public void addBentoColumn(QuPathViewer viewer) {
         splitBentoViewer(viewer, Orientation.HORIZONTAL);
+    }
+
+    // ------------------------------------------------------------------ close / detach / attach
+
+    private Dockable dockableFor(QuPathViewer viewer) {
+        for (var entry : viewerByDockable.entrySet())
+            if (entry.getValue() == viewer)
+                return entry.getKey();
+        return null;
+    }
+
+    /** True if the container is part of the live tree below the main window's Bento root. */
+    private boolean isInMainLayout(DockContainer c) {
+        for (DockContainer p = c; p != null; p = p.getParentContainer())
+            if (p == rootBranch)
+                return true;
+        return false;
+    }
+
+    private long countViewersInMain() {
+        List<DockContainerLeaf> leaves = new ArrayList<>();
+        BentofxExtension.collectLeaves(rootBranch, leaves);
+        return leaves.stream().flatMap(l -> l.getDockables().stream())
+                .filter(viewerByDockable::containsKey).count();
+    }
+
+    /** True if this viewer pane is in the main window and is the only viewer pane there. */
+    private boolean isOnlyViewerInMain(Dockable dockable) {
+        DockContainerLeaf leaf = dockable.getContainer();
+        return leaf != null && isInMainLayout(leaf) && countViewersInMain() <= 1;
+    }
+
+    private boolean viewerAreaCheckPending;
+
+    /**
+     * The main window always keeps a viewer area. A pane can leave it in ways we cannot intercept (BentoFX's
+     * own drag-out of a tab removes it and opens a window in one go), so look again once that operation is
+     * over: if no viewer is left in the main window, put an empty one in a leaf of its own, as "Detach viewer"
+     * does. Without it the analysis pane would fill the whole window.
+     */
+    private void scheduleViewerAreaCheck() {
+        if (viewerAreaCheckPending)
+            return;
+        viewerAreaCheckPending = true;
+        Platform.runLater(() -> {
+            viewerAreaCheckPending = false;
+            if (!disposed)
+                ensureViewerArea();
+        });
+    }
+
+    private void ensureViewerArea() {
+        if (countViewersInMain() > 0)
+            return;
+        ViewerManager vm = QuPathGUI.getInstance().getViewerManager();
+        QuPathViewer previouslyActive = vm.getActiveViewer();
+        QuPathViewer replacement = createRegisteredViewer();
+        if (replacement == null)
+            return;
+        registerViewer(replacement);
+        DockContainerLeaf leaf = builder.leaf("viewer-leaf-" + System.nanoTime());
+        leaf.setSide(Side.TOP);
+        rootBranch.addContainer(leaf);
+        leaf.addDockable(newViewerDockable(replacement));   // selects it, which makes it the active viewer ...
+        if (previouslyActive != null && previouslyActive != replacement)
+            activateViewer(previouslyActive);               // ... so hand that back to the one the user was using
+        logger.debug("The main window had no viewer left; added an empty one");
+    }
+
+    /** True if the viewer's pane lives in a window of its own (detached), not in the main layout. */
+    private boolean isFloating(QuPathViewer viewer) {
+        Dockable d = dockableFor(viewer);
+        return d != null && d.getContainer() != null && !isInMainLayout(d.getContainer());
+    }
+
+    /** Close only the image of a viewer that has to stay (prompts to save changes first). */
+    private void closeImageOnly(QuPathViewer viewer, String messageKey) {
+        if (QuPathGUI.getInstance().closeViewer(viewer))
+            notifyInfo(messageKey);
+    }
+
+    /**
+     * "Close viewer": close the viewer's BentoFX pane (its tab), which prompts to save changes and then
+     * removes the viewer exactly as the tab's own close button does (see {@link #onDockEvent}). The last viewer
+     * cannot be removed (QuPath needs one), so only its image is closed.
+     */
+    public void closeBentoViewer(QuPathViewer viewer) {
+        if (viewer == null)
+            return;
+        Dockable dockable = dockableFor(viewer);
+        DockContainerLeaf leaf = dockable == null ? null : dockable.getContainer();
+        if (leaf == null) {
+            logger.warn("Could not find the BentoFX pane of viewer {}", viewer);
+            return;
+        }
+        if (!dockable.isClosable())
+            closeImageOnly(viewer, "info.last-viewer");
+        else
+            leaf.closeDockable(dockable);   // DockableClosing -> onDockEvent does the rest
+    }
+
+    /**
+     * "Detach viewer": move the viewer's pane into a window of its own, the same thing that happens when its
+     * tab is dragged out of the window. If it is the only viewer in the main window, an empty viewer is left
+     * behind in its place (as QuPath does with its own grid), so the main window keeps a viewer area.
+     */
+    public void detachBentoViewer(QuPathViewer viewer) {
+        if (viewer == null)
+            return;
+        Dockable dockable = dockableFor(viewer);
+        DockContainerLeaf leaf = dockable == null ? null : dockable.getContainer();
+        if (leaf == null) {
+            logger.warn("Could not find the BentoFX pane of viewer {}", viewer);
+            return;
+        }
+        if (!isInMainLayout(leaf)) {
+            notifyInfo("info.viewer-already-floating");
+            return;
+        }
+        if (!dockable.isCanBeDroppedToNewWindow()) {
+            notifyInfo("info.viewer-cannot-detach");
+            return;
+        }
+        Scene scene = leaf.getScene();
+
+        // Is this the only viewer left in the main window?
+        if (countViewersInMain() <= 1) {
+            QuPathViewer replacement = createRegisteredViewer();
+            if (replacement != null) {
+                registerViewer(replacement);
+                leaf.addDockable(newViewerDockable(replacement));   // not selected yet, so not shown yet
+            }
+        }
+
+        if (!leaf.removeDockable(dockable)) {
+            logger.warn("Could not remove viewer pane '{}' from its leaf", dockable.getTitle());
+            return;
+        }
+        Stage stage = leaf.getBento().stageBuilding().newStageForDockable(scene, leaf, dockable);
+        stage.show();
+        stage.toFront();
+        stage.requestFocus();
+        activateViewer(viewer);
+    }
+
+    /** "Attach viewer": put a detached viewer's pane back into the main layout and close its window. */
+    public void attachBentoViewer(QuPathViewer viewer) {
+        if (viewer == null)
+            return;
+        Dockable dockable = dockableFor(viewer);
+        DockContainerLeaf current = dockable == null ? null : dockable.getContainer();
+        if (current == null) {
+            logger.warn("Could not find the BentoFX pane of viewer {}", viewer);
+            return;
+        }
+        if (isInMainLayout(current)) {
+            notifyInfo("info.viewer-already-docked");
+            return;
+        }
+        DockContainerLeaf target = mainViewerLeaf();
+        if (target == null) {
+            logger.warn("No leaf in the main layout to attach viewer pane '{}' to", dockable.getTitle());
+            return;
+        }
+        // Leaves the floating window empty, which closes it (DragDropStage closes when emptied)
+        if (!current.removeDockable(dockable))
+            return;
+        if (target.addDockable(dockable)) {
+            target.selectDockable(dockable);
+            activateViewer(viewer);
+        } else {
+            logger.warn("Could not attach viewer pane '{}' to leaf {}", dockable.getTitle(), target.getIdentifier());
+        }
+    }
+
+    /** Leaf of the active viewer if that is in the main layout, else any main-layout leaf with viewers. */
+    private DockContainerLeaf mainViewerLeaf() {
+        List<DockContainerLeaf> leaves = new ArrayList<>();
+        BentofxExtension.collectLeaves(rootBranch, leaves);
+        QuPathViewer active = QuPathGUI.getInstance().getViewerManager().getActiveViewer();
+        for (DockContainerLeaf l : leaves)
+            if (l.getDockables().stream().anyMatch(d -> viewerByDockable.get(d) == active && active != null))
+                return l;
+        for (DockContainerLeaf l : leaves)
+            if (l.getDockables().stream().anyMatch(viewerByDockable::containsKey))
+                return l;
+        return leaves.isEmpty() ? null : leaves.get(0);
     }
 
     private int indexOfChild( DockContainerBranch parent, Node child) {
@@ -471,14 +765,9 @@ public class BentoMenuInterceptor {
         return null;
     }
     
-    private void rememberOriginal(QuPathViewer viewer, MenuItem item) {
-        originalActions.computeIfAbsent(viewer, v -> new java.util.IdentityHashMap<>())
-                .putIfAbsent(item, item.getOnAction());   // first call sees QuPath's own handler
-    }
-
     /**
      * Undo everything this interceptor attached to QuPath: the active-viewer listener, the rebound
-     * "add row"/"add column" context-menu items (back to QuPath's own handlers), and the
+     * multi-view menu items (back to QuPath's own handlers), and the
      * context-menu-requested hooks on the viewers.
      */
     public void dispose() {
@@ -486,6 +775,8 @@ public class BentoMenuInterceptor {
         QuPathGUI.getInstance().getViewerManager().activeViewerProperty().removeListener(activeViewerListener);
         originalActions.values().forEach(items -> items.forEach((item, handler) -> item.setOnAction(handler)));
         originalActions.clear();
+        menuBarOriginals.forEach((item, handler) -> item.setOnAction(handler));
+        menuBarOriginals.clear();
         for (QuPathViewer viewer : registered) {
             if (viewer.getView() != null)
                 viewer.getView().setOnContextMenuRequested(null);

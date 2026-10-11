@@ -2,7 +2,6 @@ package qupath.ext.bentofx;
 
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
-import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.geometry.Orientation;
@@ -20,6 +19,8 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.ToolBar;
 import javafx.scene.control.Tooltip;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.Pane;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 
@@ -46,6 +47,7 @@ import java.util.function.Predicate;
 
 import software.coley.bentofx.Bento;
 import software.coley.bentofx.building.DockBuilding;
+import software.coley.bentofx.control.DragDropStage;
 import software.coley.bentofx.dockable.Dockable;
 import software.coley.bentofx.layout.DockContainer;
 import software.coley.bentofx.layout.container.DockContainerBranch;
@@ -66,6 +68,9 @@ public class BentofxExtension implements QuPathExtension {
 
 	private boolean isInstalled = false;
 
+	/** A captured window narrower than this is docked into the analysis pane, a wider one next to the viewers. */
+	private static final double NARROW_PANEL_PX = 400;
+
 	/**
 	 * Persistent preference (shown in QuPath's Preferences window): initialise BentoFX automatically when
 	 * QuPath starts. Off by default, since it replaces QuPath's own layout. Read once, at startup.
@@ -84,9 +89,11 @@ public class BentofxExtension implements QuPathExtension {
 	private PaneSizing paneSizing;
 	private CollapseGuard collapseGuard;
 
-	/** True while BentoFX is initialised; the toolbar button follows it. */
-	private final BooleanProperty bentoActive = new SimpleBooleanProperty(false);
 	private CapturedWindows capturedWindows;
+
+	/** Toolbar button (and the separator before it); present only while BentoFX is initialised. */
+	private Button captureButton;
+	private Separator captureSeparator;
 
 	// Remembered so that deactivation can rebuild QuPath's own layout
 	private SplitPane mainSplitPane;
@@ -102,7 +109,6 @@ public class BentofxExtension implements QuPathExtension {
 		isInstalled = true;
 		addPreferenceToPane(qupath);
 		addMenuItem(qupath);
-		addToolbarButton(qupath);
 		enableOnStartupIfRequested(qupath);
 	}
 
@@ -175,9 +181,12 @@ public class BentofxExtension implements QuPathExtension {
 
 	/**
 	 * A magnet button at the right-hand end of QuPath's main toolbar that captures floating windows
-	 * (same as Extensions > BentoFX > Capture floating windows). Only enabled while BentoFX is initialised.
+	 * (same as Extensions > BentoFX > Capture floating windows). Added when BentoFX is initialised and
+	 * removed again by {@link #removeToolbarButton(QuPathGUI)} when it is deactivated.
 	 */
 	private void addToolbarButton(QuPathGUI qupath) {
+		if (captureButton != null)
+			return;
 		ToolBar toolBar = qupath.getToolBar();
 		if (toolBar == null) {
 			logger.warn("QuPath's toolbar is not available; the capture button was not added");
@@ -187,10 +196,21 @@ public class BentofxExtension implements QuPathExtension {
 		button.setGraphic(IconFactory.createFontAwesome('\uf076'));   // FontAwesome "magnet"
 		button.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
 		button.setFocusTraversable(false);
-		button.setTooltip(new Tooltip("Capture floating windows into BentoFX\n(initialise BentoFX first)"));
-		button.disableProperty().bind(bentoActive.not());
+		button.setTooltip(new Tooltip("Capture floating windows into BentoFX\n(also brings torn-off panels and detached viewers back)"));
 		button.setOnAction(e -> bentoCapture());
-		toolBar.getItems().addAll(new Separator(Orientation.VERTICAL), button);
+		Separator separator = new Separator(Orientation.VERTICAL);
+		toolBar.getItems().addAll(separator, button);
+		captureButton = button;
+		captureSeparator = separator;
+	}
+
+	/** Take the capture button (and its separator) off QuPath's toolbar again. */
+	private void removeToolbarButton(QuPathGUI qupath) {
+		ToolBar toolBar = qupath.getToolBar();
+		if (toolBar != null && captureButton != null)
+			toolBar.getItems().removeAll(captureSeparator, captureButton);
+		captureButton = null;
+		captureSeparator = null;
 	}
 
 	/**
@@ -321,16 +341,15 @@ public class BentofxExtension implements QuPathExtension {
 			dockable.setTitle(BentoMenuInterceptor.EMPTY_VIEWER_TITLE);   // replaced by the image name once tracked
 			var v = viewer.getView();
 
+			// A viewer QuPath had detached into its own window: take it out of that window, which is then closed
+			releaseDetachedViewerWindow(v, qupath.getStage());
+
 			// Keep QuPath's file drop, but let Bento tab drags through
 			ViewerDragDrop.install(qupath, v);
 			PanelFitter.enforceMinSize(v, PanelFitter.MIN_VIEWER_W, PanelFitter.MIN_VIEWER_H);
 
 			dockable.setNode(v);
 			menuInterceptor.trackViewer(dockable, viewer);
-
-			if (i == 0) {
-				dockable.setClosable(false);
-			}
 
 			dockable.setDragGroupMask(DragGroups.VIEWER);
 			viewerLeaf.addDockables(dockable);
@@ -359,9 +378,27 @@ public class BentofxExtension implements QuPathExtension {
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
 
-		bentoActive.set(true);
+		addToolbarButton(qupath);
 		logger.info("BentoFX layout initialised with {} viewer(s)", viewerManager.getAllViewers().size());
 
+	}
+
+	/**
+	 * If a viewer's view is in a window of its own (QuPath's "Detach viewer from grid"), take it out of that
+	 * window and close the window, so no empty window is left behind when the view is docked into BentoFX.
+	 * Mirrors what QuPath itself does when it re-attaches a viewer: the window's content is emptied first, so
+	 * nothing in it still refers to the view.
+	 */
+	private static void releaseDetachedViewerWindow(Node view, Stage mainStage) {
+		var scene = view.getScene();
+		if (scene == null || !(scene.getWindow() instanceof Stage stage) || stage == mainStage)
+			return;
+		logger.debug("Closing the window of a detached viewer ('{}')", stage.getTitle());
+		if (scene.getRoot() instanceof Pane pane)
+			pane.getChildren().clear();
+		scene.setRoot(new BorderPane());
+		stage.titleProperty().unbind();   // QuPath binds the title to the viewer's image name
+		stage.hide();
 	}
 
 	/**
@@ -399,17 +436,7 @@ public class BentofxExtension implements QuPathExtension {
 		// Tabs that were dragged out of the main window live in windows BentoFX opened itself, each with a root of
 		// its own. Their content has to be released too: it is bound to those windows, and is taken back below.
 		List<Stage> floatingStages = new ArrayList<>();
-		for (var floatingRoot : new ArrayList<>(bento.getRootContainers())) {
-			if (floatingRoot.equals(rootBranch))
-				continue;
-			var floatingScene = floatingRoot.getScene();
-			if (floatingScene != null && floatingScene.getWindow() instanceof Stage floatingStage
-					&& floatingStage != qupath.getStage()) {
-				collectLeaves(floatingRoot, leaves);
-				if (!floatingStages.contains(floatingStage))
-					floatingStages.add(floatingStage);
-			}
-		}
+		collectFloatingLeaves(leaves, floatingStages);
 		for (DockContainerLeaf leaf : leaves)
 			leaf.selectDockable(null);
 
@@ -475,7 +502,7 @@ public class BentofxExtension implements QuPathExtension {
 		mainSplitPane = null;
 		analysisTabPane = null;
 		bentoCssUrl = null;
-		bentoActive.set(false);
+		removeToolbarButton(qupath);
 
 		// 9. QuPath's handler is back in charge: use it to hide the pane if it was hidden
 		if (!analysisVisible)
@@ -506,7 +533,8 @@ public class BentofxExtension implements QuPathExtension {
 
 		for (Window window : windows) {
 			if (window instanceof Stage stage) {
-				if (stage != mainStage && stage.isShowing() && !capturedWindows.isCapturedStage(stage) &&
+				if (stage != mainStage && !(stage instanceof DragDropStage) && stage.isShowing()
+					&& !capturedWindows.isCapturedStage(stage) &&
 					stage.getTitle() != null && !stage.getTitle().isEmpty()) {
 
 					String windowTitle = stage.getTitle();
@@ -534,6 +562,9 @@ public class BentofxExtension implements QuPathExtension {
 			return;
 		}
 
+		// Tabs that were torn out of the main window, or detached viewers, come back first
+		int reintegrated = reintegrateFloatingTabs();
+
 		List<CapturedStage> captured = getDialogWindowsPanes();
 
 		for (CapturedStage cs : captured) {
@@ -544,7 +575,7 @@ public class BentofxExtension implements QuPathExtension {
 			double paneHeight = pane.getBoundsInLocal().getHeight();
 			logger.debug("Processing window '{}' - width={}", title, paneWidth);
 
-			boolean narrow = paneWidth < 400;
+			boolean narrow = paneWidth < NARROW_PANEL_PX;
 
 			Dockable dockable = builder.dockable();
 			dockable.setTitle(title);
@@ -578,7 +609,7 @@ public class BentofxExtension implements QuPathExtension {
 
 		Dialogs.showInfoNotification(
 			resources.getString("name"),
-			captured.isEmpty() ? resources.getString("info.no-capture") : resources.getString("info.windows-captured")
+			captured.isEmpty() && reintegrated == 0 ? resources.getString("info.no-capture") : resources.getString("info.windows-captured")
 		);
 	}
 
@@ -602,6 +633,75 @@ public class BentofxExtension implements QuPathExtension {
 		} catch (Exception e) {
 			logger.error("Could not remove the extra viewer grid rows; hiding them instead", e);
 			main.getItems().remove(1, main.getItems().size());
+		}
+	}
+
+	/**
+	 * Move every tab that lives in a window BentoFX opened (a tab dragged out of the main window, a detached
+	 * viewer) back into the main layout, where its kind decides where it goes: viewers into the viewer area,
+	 * analysis tabs into the analysis pane, captured dialogs by the size of the window they came from. The
+	 * emptied windows close themselves; any that do not are hidden.
+	 *
+	 * @return the number of tabs moved
+	 */
+	private int reintegrateFloatingTabs() {
+		List<DockContainerLeaf> leaves = new ArrayList<>();
+		List<Stage> stages = new ArrayList<>();
+		collectFloatingLeaves(leaves, stages);
+
+		int moved = 0;
+		for (DockContainerLeaf leaf : leaves) {
+			for (Dockable dockable : new ArrayList<>(leaf.getDockables())) {
+				// Decide before removing: the target may have to reveal the analysis pane or make a leaf
+				DockContainerLeaf target = reintegrationTarget(dockable);
+				if (!leaf.removeDockable(dockable)) {
+					logger.warn("Could not take '{}' out of its floating window", dockable.getTitle());
+					continue;
+				}
+				if (target.addDockable(dockable)) {
+					target.selectDockable(dockable);
+					moved++;
+					logger.debug("Reintegrated '{}' into leaf {}", dockable.getTitle(), target.getIdentifier());
+				} else {
+					logger.warn("Could not dock '{}' into leaf {}", dockable.getTitle(), target.getIdentifier());
+				}
+			}
+		}
+		// Normally gone already (an emptied window closes itself); hide, never close(): a close request
+		// would make BentoFX close the tabs it still lists
+		for (Stage stage : stages)
+			if (stage.isShowing())
+				stage.hide();
+		return moved;
+	}
+
+	private DockContainerLeaf reintegrationTarget(Dockable dockable) {
+		int mask = dockable.getDragGroupMask();
+		if (mask == DragGroups.VIEWER)
+			return viewerPaneTarget();
+		if (mask == DragGroups.ANALYSIS)
+			return analysisTarget();
+		// Captured dialog (FLEX): same rule as when it was captured, by the size of its original window
+		double width = paneSizing.declaredWidth(dockable);
+		return width > 0 && width < NARROW_PANEL_PX ? analysisTarget() : viewerTarget();
+	}
+
+	/**
+	 * Leaves (and their windows) of every window BentoFX opened itself: each has a Bento root of its own,
+	 * separate from the one in QuPath's main window.
+	 */
+	private void collectFloatingLeaves(List<DockContainerLeaf> leaves, List<Stage> stages) {
+		Stage mainStage = QuPathGUI.getInstance().getStage();
+		for (var floatingRoot : new ArrayList<>(bento.getRootContainers())) {
+			if (floatingRoot.equals(rootBranch))
+				continue;
+			var floatingScene = floatingRoot.getScene();
+			if (floatingScene != null && floatingScene.getWindow() instanceof Stage floatingStage
+					&& floatingStage != mainStage) {
+				collectLeaves(floatingRoot, leaves);
+				if (!stages.contains(floatingStage))
+					stages.add(floatingStage);
+			}
 		}
 	}
 
@@ -659,8 +759,32 @@ public class BentofxExtension implements QuPathExtension {
 		return anyLeafOrNew();
 	}
 
-	/** Leaf of the active viewer, else any attached leaf holding a viewer, else a new leaf. */
+	/** Leaf of the active viewer, else any attached leaf holding a viewer, else any leaf. */
 	private DockContainerLeaf viewerTarget() {
+		DockContainerLeaf leaf = findViewerLeaf();
+		if (leaf != null)
+			return leaf;
+		if (!isAttached(viewerLeaf))
+			logger.warn("The original viewer leaf is no longer in the layout");
+		return anyLeafOrNew();
+	}
+
+	/**
+	 * Where a viewer pane goes: the viewer area, or a new leaf of its own if the main window has none (all
+	 * its viewers are detached). Never the analysis leaf.
+	 */
+	private DockContainerLeaf viewerPaneTarget() {
+		DockContainerLeaf leaf = findViewerLeaf();
+		if (leaf != null)
+			return leaf;
+		leaf = builder.leaf("viewer-leaf-" + System.nanoTime());
+		leaf.setSide(Side.TOP);
+		rootBranch.addContainer(leaf);
+		return leaf;
+	}
+
+	/** Leaf of the active viewer, else any leaf of the main layout holding a viewer; null if there is none. */
+	private DockContainerLeaf findViewerLeaf() {
 		QuPathViewer active = QuPathGUI.getInstance().getViewerManager().getActiveViewer();
 		if (active != null && active.getView() != null) {
 			Node view = active.getView();
@@ -669,13 +793,8 @@ public class BentofxExtension implements QuPathExtension {
 			if (leaf != null)
 				return leaf;
 		}
-		DockContainerLeaf leaf = findLeaf(rootBranch,
+		return findLeaf(rootBranch,
 				l -> l.getDockables().stream().anyMatch(d -> d.getDragGroupMask() == DragGroups.VIEWER));
-		if (leaf != null)
-			return leaf;
-		if (!isAttached(viewerLeaf))
-			logger.warn("The original viewer leaf is no longer in the layout");
-		return anyLeafOrNew();
 	}
 
 	private DockContainerLeaf anyLeafOrNew() {

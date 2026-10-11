@@ -72,6 +72,12 @@ final class PaneSizing {
             declared.put(dockable, new double[]{width, height + TAB_STRIP_ALLOWANCE});
     }
 
+    /** Width of the window a dockable was captured from, or -1 if it did not come from a captured window. */
+    double declaredWidth(Dockable dockable) {
+        double[] wh = declared.get(dockable);
+        return wh == null ? -1 : wh[0];
+    }
+
     private boolean disposed;
 
     /** Stop reacting to layout events (used while BentoFX is being taken apart). */
