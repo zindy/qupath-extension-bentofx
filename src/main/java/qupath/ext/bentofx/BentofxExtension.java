@@ -82,6 +82,7 @@ public class BentofxExtension implements QuPathExtension {
 	private BentoMenuInterceptor menuInterceptor;
 	private AnalysisPaneToggle analysisToggle;
 	private PaneSizing paneSizing;
+	private CollapseGuard collapseGuard;
 
 	/** True while BentoFX is initialised; the toolbar button follows it. */
 	private final BooleanProperty bentoActive = new SimpleBooleanProperty(false);
@@ -352,6 +353,8 @@ public class BentofxExtension implements QuPathExtension {
 		// Closing a captured tab hands the dialog back to its original Stage
 		capturedWindows = new CapturedWindows(this::revealDockable);
 		bento.events().addEventListener(capturedWindows::onDockEvent);
+		collapseGuard = new CollapseGuard(bento);   // see CollapseGuard
+		bento.events().addEventListener(collapseGuard::onDockEvent);
 
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
@@ -387,6 +390,7 @@ public class BentofxExtension implements QuPathExtension {
 		//    selection is cleared ("A bound value cannot be set" otherwise). Clearing the selection is Bento's
 		//    own release path: it unbinds and puts a placeholder in; no events, no pruning.
 		paneSizing.dispose();
+		collapseGuard.dispose();
 		menuInterceptor.dispose();        // add row/column items, active-viewer listener
 		List<DockContainerLeaf> leaves = new ArrayList<>();
 		collectLeaves(rootBranch, leaves);
@@ -466,6 +470,7 @@ public class BentofxExtension implements QuPathExtension {
 		menuInterceptor = null;
 		analysisToggle = null;
 		paneSizing = null;
+		collapseGuard = null;
 		capturedWindows = null;
 		mainSplitPane = null;
 		analysisTabPane = null;
@@ -616,7 +621,7 @@ public class BentofxExtension implements QuPathExtension {
 
 	// ------------------------------------------------------------------ capture targets
 
-	private static void collectLeaves(DockContainer c, List<DockContainerLeaf> out) {
+	static void collectLeaves(DockContainer c, List<DockContainerLeaf> out) {
 		if (c instanceof DockContainerLeaf leaf)
 			out.add(leaf);
 		else if (c instanceof DockContainerBranch branch)
