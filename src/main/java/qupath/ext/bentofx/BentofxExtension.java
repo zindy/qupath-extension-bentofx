@@ -375,6 +375,12 @@ public class BentofxExtension implements QuPathExtension {
 		collapseGuard = new CollapseGuard(bento);   // see CollapseGuard
 		bento.events().addEventListener(collapseGuard::onDockEvent);
 
+		// Right-click menu on tabs: tab position and minimise (see TabContextMenu)
+		bento.events().addEventListener(new TabContextMenu()::onDockEvent);
+		List<DockContainerLeaf> existingLeaves = new ArrayList<>();
+		collectLeaves(rootBranch, existingLeaves);
+		existingLeaves.forEach(l -> l.getDockables().forEach(TabContextMenu::install));
+
 		rootBranch.requestFocus();
 		rootBranch.requestLayout();
 
