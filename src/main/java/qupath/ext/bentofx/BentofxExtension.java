@@ -49,6 +49,7 @@ import software.coley.bentofx.Bento;
 import software.coley.bentofx.building.DockBuilding;
 import software.coley.bentofx.control.DragDropStage;
 import software.coley.bentofx.dockable.Dockable;
+import software.coley.bentofx.event.DockEvent;
 import software.coley.bentofx.layout.DockContainer;
 import software.coley.bentofx.layout.container.DockContainerBranch;
 import software.coley.bentofx.layout.container.DockContainerLeaf;
@@ -99,6 +100,16 @@ public class BentofxExtension implements QuPathExtension {
 	private SplitPane mainSplitPane;
 	private TabPane analysisTabPane;
 	private String bentoCssUrl;
+
+	/**
+	 * Which of QuPath's own analysis tabs each Bento tab stands for. QuPath's TabPane is no longer on screen once
+	 * BentoFX has taken over its tab contents, but QuPath's panes still ask it which tab is selected (e.g. to skip
+	 * updating the annotation list/measurements while their tab is "not visible"), so its selection has to follow
+	 * what Bento shows (see {@link #installAnalysisTabSync()}).
+	 */
+	private final Map<Dockable, Tab> analysisTabs = new java.util.IdentityHashMap<>();
+	private ChangeListener<Tab> analysisTabListener;
+	private boolean syncingAnalysisTab;
 
 	@Override
 	public void installExtension(QuPathGUI qupath) {
@@ -324,7 +335,11 @@ public class BentofxExtension implements QuPathExtension {
 				dockable.setClosable(false);  // Remove close button
 				dockable.setDragGroupMask(DragGroups.ANALYSIS);
 				analysisLeaf.addDockables(dockable);
+				analysisTabs.put(dockable, tab);
 			});
+
+		// Keep QuPath's (hidden) analysis TabPane selection in step with the tab Bento shows
+		installAnalysisTabSync();
 
 		// Add viewers
 		logger.debug("Adding viewers to Bento...");
@@ -390,6 +405,80 @@ public class BentofxExtension implements QuPathExtension {
 	}
 
 	/**
+	 * Two-way link between Bento's selected analysis tab and the selected tab of QuPath's own (now hidden)
+	 * analysis TabPane. Without it, QuPath's TabPane keeps "selected" whatever tab was selected when BentoFX was
+	 * initialised, and any QuPath pane that only refreshes while its own tab is selected (annotation list and
+	 * measurements, ...) silently stops updating.
+	 * Selecting a Tab only flips its selected state: the TabPane's skin does not take the content node back
+	 * from Bento, so this is safe while the content is docked.
+	 */
+	private void installAnalysisTabSync() {
+		// Bento -> QuPath
+		bento.events().addEventListener(this::onAnalysisDockEvent);
+		// QuPath -> Bento (QuPath selects tabs itself, e.g. to show the Image or Annotations tab)
+		analysisTabListener = (obs, oldTab, newTab) -> {
+			if (newTab != null)
+				showAnalysisTab(newTab);
+		};
+		analysisTabPane.getSelectionModel().selectedItemProperty().addListener(analysisTabListener);
+
+		// Initial state: what QuPath had selected is what the user was looking at
+		Tab current = analysisTabPane.getSelectionModel().getSelectedItem();
+		if (current != null)
+			showAnalysisTab(current);
+		selectedDockableToTab(analysisLeaf.getSelectedDockable());
+	}
+
+	private void onAnalysisDockEvent(DockEvent event) {
+		if (event instanceof DockEvent.DockableSelected selected)
+			selectedDockableToTab(selected.dockable());
+	}
+
+	/** A Bento analysis tab became the selected one in its pane: select the matching tab in QuPath's TabPane. */
+	private void selectedDockableToTab(Dockable dockable) {
+		if (syncingAnalysisTab || dockable == null || analysisTabPane == null)
+			return;
+		Tab tab = analysisTabs.get(dockable);
+		if (tab == null)
+			return;
+		syncingAnalysisTab = true;
+		try {
+			analysisTabPane.getSelectionModel().select(tab);
+		} finally {
+			syncingAnalysisTab = false;
+		}
+	}
+
+	/** QuPath selected one of its analysis tabs: bring the matching Bento tab to the front, if it is displayed. */
+	private void showAnalysisTab(Tab tab) {
+		if (syncingAnalysisTab)
+			return;
+		for (var entry : analysisTabs.entrySet()) {
+			if (entry.getValue() != tab)
+				continue;
+			Dockable dockable = entry.getKey();
+			DockContainerLeaf leaf = dockable.getContainer();
+			if (leaf == null || !isAttached(leaf) || leaf.getSelectedDockable() == dockable)
+				return;
+			syncingAnalysisTab = true;
+			try {
+				leaf.selectDockable(dockable);
+			} finally {
+				syncingAnalysisTab = false;
+			}
+			return;
+		}
+	}
+
+	/** Stop following the analysis tabs (BentoFX is being deactivated). */
+	private void disposeAnalysisTabSync() {
+		if (analysisTabListener != null && analysisTabPane != null)
+			analysisTabPane.getSelectionModel().selectedItemProperty().removeListener(analysisTabListener);
+		analysisTabListener = null;
+		analysisTabs.clear();
+	}
+
+	/**
 	 * If a viewer's view is in a window of its own (QuPath's "Detach viewer from grid"), take it out of that
 	 * window and close the window, so no empty window is left behind when the view is docked into BentoFX.
 	 * Mirrors what QuPath itself does when it re-attaches a viewer: the window's content is emptied first, so
@@ -432,6 +521,7 @@ public class BentofxExtension implements QuPathExtension {
 		//    ContentWrapper.center to the selected tab's node, so a node can only be moved elsewhere once the
 		//    selection is cleared ("A bound value cannot be set" otherwise). Clearing the selection is Bento's
 		//    own release path: it unbinds and puts a placeholder in; no events, no pruning.
+		disposeAnalysisTabSync();         // before the selection is cleared below
 		paneSizing.dispose();
 		collapseGuard.dispose();
 		menuInterceptor.dispose();        // add row/column items, active-viewer listener
