@@ -6,7 +6,11 @@ import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.geometry.Orientation;
 import javafx.geometry.Side;
+import javafx.animation.PauseTransition;
+import javafx.collections.ListChangeListener;
+import javafx.event.Event;
 import javafx.scene.Node;
+import javafx.util.Duration;
 import javafx.scene.Parent;
 import javafx.scene.Group;
 import javafx.scene.control.Label;
@@ -17,10 +21,13 @@ import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.Tooltip;
+import javafx.scene.control.skin.TabPaneSkin;
 import javafx.scene.control.ToolBar;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.Pane;
+import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 
@@ -36,11 +43,18 @@ import qupath.lib.gui.tools.IconFactory;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.gui.viewer.ViewerManager;
 
+import java.io.IOException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.ResourceBundle;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -49,6 +63,7 @@ import software.coley.bentofx.Bento;
 import software.coley.bentofx.building.DockBuilding;
 import software.coley.bentofx.control.DragDropStage;
 import software.coley.bentofx.dockable.Dockable;
+import software.coley.bentofx.event.DockEvent;
 import software.coley.bentofx.layout.DockContainer;
 import software.coley.bentofx.layout.container.DockContainerBranch;
 import software.coley.bentofx.layout.container.DockContainerLeaf;
@@ -78,6 +93,22 @@ public class BentofxExtension implements QuPathExtension {
 	private static final BooleanProperty enableOnStartupProperty = PathPrefs.createPersistentPreference(
 			"bentofx.enableOnStartup", false);
 
+	/**
+	 * Persistent preference: when BentoFX is initialised, restore the layout saved with Extensions > BentoFX >
+	 * Save layout. Off by default.
+	 */
+	private static final BooleanProperty restoreLayoutProperty = PathPrefs.createPersistentPreference(
+			"bentofx.restoreLayoutOnStart", false);
+
+	/** The saved layout lives in QuPath's user directory. */
+	private static final String LAYOUT_FILE_NAME = "bentofx-layout.json";
+
+	/**
+	 * Homes of captured dialogs that were part of a restored layout but are not open (so cannot be restored):
+	 * each is used, and removed, when that dialog is next captured. See {@link LayoutSnapshot.Slot}.
+	 */
+	private final Map<String, LayoutSnapshot.Slot> pendingSlots = new LinkedHashMap<>();
+
 	private Bento bento;
 	private DockBuilding builder;
 	private DockContainerBranch rootBranch;
@@ -100,6 +131,9 @@ public class BentofxExtension implements QuPathExtension {
 	private TabPane analysisTabPane;
 	/** QuPath's analysis tabs as they were before BentoFX took their contents, in order, and the selected one. */
 	private List<Tab> originalAnalysisTabs;
+	/** Tabs that scripts have added to QuPath's analysis TabPane (which is hidden while BentoFX is on), and their panes. */
+	private final Map<Tab, ScriptTab> scriptTabs = new IdentityHashMap<>();
+	private ListChangeListener<Tab> analysisTabListener;
 	private Tab originalSelectedAnalysisTab;
 	private String bentoCssUrl;
 
@@ -124,10 +158,15 @@ public class BentofxExtension implements QuPathExtension {
 				.category(EXTENSION_NAME)
 				.description(resources.getString("pref.enable-on-startup.description"))
 				.build();
+		var restoreItem = new PropertyItemBuilder<>(restoreLayoutProperty, Boolean.class)
+				.name(resources.getString("pref.restore-layout"))
+				.category(EXTENSION_NAME)
+				.description(resources.getString("pref.restore-layout.description"))
+				.build();
 		qupath.getPreferencePane()
 				.getPropertySheet()
 				.getItems()
-				.add(propertyItem);
+				.addAll(propertyItem, restoreItem);
 	}
 
 	/**
@@ -176,6 +215,14 @@ public class BentofxExtension implements QuPathExtension {
 		MenuItem captureItem = new MenuItem("Capture floating windows");
 		captureItem.setOnAction(e -> bentoCapture());
 		menu.getItems().add(captureItem);
+
+		MenuItem saveLayoutItem = new MenuItem(resources.getString("menu.save-layout"));
+		saveLayoutItem.setOnAction(e -> bentoSaveLayout());
+		menu.getItems().add(saveLayoutItem);
+
+		MenuItem restoreLayoutItem = new MenuItem(resources.getString("menu.restore-layout"));
+		restoreLayoutItem.setOnAction(e -> bentoRestoreLayout(true));
+		menu.getItems().add(restoreLayoutItem);
 
 		MenuItem deactivateItem = new MenuItem("Deactivate BentoFX");
 		deactivateItem.setOnAction(e -> bentoTeardown());
@@ -318,15 +365,21 @@ public class BentofxExtension implements QuPathExtension {
 
 		// Add analysis tab pane contents
 		logger.debug("Adding analysis tabs to Bento...");
+		// QuPath's own TabPane is not shown while BentoFX is on, and must not keep hold of tab contents: a skin lays
+		// out the content of every tab it holds, which takes it away from the pane showing it. bentoTeardown gives
+		// it a skin again.
+		analysisPane.setSkin(null);
 		analysisPane.getTabs().stream()
 			.filter(tab -> tab.getContent() != null)
 			.forEach(tab -> {
-				Dockable dockable = builder.dockable();
-				dockable.setTitle(tab.getText());
-				dockable.setNode(tab.getContent());
-				dockable.setClosable(false);  // Remove close button
-				dockable.setDragGroupMask(DragGroups.ANALYSIS);
+				Dockable dockable = newAnalysisDockable(tab);
 				analysisLeaf.addDockables(dockable);
+				// A tab with an id is a script's: it stays in the TabPane so that the script, which looks for
+				// its own tab there by id before adding it again, still finds it (see ScriptTab)
+				if (tab.getId() != null) {
+					dockable.setClosable(true);
+					scriptTabs.put(tab, new ScriptTab(tab, dockable));
+				}
 			});
 
 		// QuPath's annotation list, measurement table and hierarchy view only update while their tab is selected in
@@ -337,7 +390,11 @@ public class BentofxExtension implements QuPathExtension {
 		originalAnalysisTabs = new ArrayList<>(analysisPane.getTabs());
 		originalSelectedAnalysisTab = analysisPane.getSelectionModel().getSelectedItem();
 		analysisPane.getTabs().removeAll(
-				originalAnalysisTabs.stream().filter(tab -> tab.getContent() != null).toList());
+				originalAnalysisTabs.stream().filter(tab -> tab.getContent() != null && tab.getId() == null).toList());
+
+		// From now on, tabs that scripts add to that TabPane are shown here
+		analysisTabListener = this::onAnalysisTabsChanged;
+		analysisPane.getTabs().addListener(analysisTabListener);
 
 		// Add viewers
 		logger.debug("Adding viewers to Bento...");
@@ -390,6 +447,7 @@ public class BentofxExtension implements QuPathExtension {
 
 		// Right-click menu on tabs: tab position and minimise (see TabContextMenu)
 		bento.events().addEventListener(new TabContextMenu()::onDockEvent);
+		bento.events().addEventListener(this::onScriptTabEvent);
 		List<DockContainerLeaf> existingLeaves = new ArrayList<>();
 		collectLeaves(rootBranch, existingLeaves);
 		existingLeaves.forEach(l -> l.getDockables().forEach(TabContextMenu::install));
@@ -398,6 +456,10 @@ public class BentofxExtension implements QuPathExtension {
 		rootBranch.requestLayout();
 
 		addToolbarButton(qupath);
+
+		// The layout saved last time, if the preference asks for it (after QuPath has laid out what we just built)
+		if (restoreLayoutProperty.get())
+			Platform.runLater(() -> bentoRestoreLayout(false));
 		logger.info("BentoFX layout initialised with {} viewer(s)", viewerManager.getAllViewers().size());
 
 	}
@@ -461,6 +523,8 @@ public class BentofxExtension implements QuPathExtension {
 
 		// 2. Give docked dialogs back to their own windows (and show them again)
 		capturedWindows.releaseAll();
+		pendingSlots.clear();
+		stopWatchingForDialogs();
 
 		// 3. Hand the remaining hooks back to QuPath
 		analysisToggle.dispose(qupath);   // Shift+A -> QuPath's own property again
@@ -484,7 +548,17 @@ public class BentofxExtension implements QuPathExtension {
 		// 5. Analysis tabs: their content nodes were moved into Bento. Setting the content again re-attaches
 		//    it to the TabPane's own content region.
 		//    The tabs were taken out of the TabPane at setup: put them back, in their original order.
-		List<Tab> tabsToRestore = originalAnalysisTabs != null ? originalAnalysisTabs : new ArrayList<>(analysisTabPane.getTabs());
+		if (analysisTabListener != null) {
+			analysisTabPane.getTabs().removeListener(analysisTabListener);
+			analysisTabListener = null;
+		}
+		scriptTabs.values().forEach(ScriptTab::detach);
+		scriptTabs.clear();
+		analysisTabPane.setSkin(new TabPaneSkin(analysisTabPane));
+		List<Tab> tabsToRestore = new ArrayList<>(originalAnalysisTabs != null ? originalAnalysisTabs : List.of());
+		for (Tab tab : analysisTabPane.getTabs())      // tabs scripts added while BentoFX was on stay too
+			if (!tabsToRestore.contains(tab))
+				tabsToRestore.add(tab);
 		for (Tab tab : tabsToRestore) {
 			Node content = tab.getContent();
 			if (content != null) {
@@ -551,7 +625,13 @@ public class BentofxExtension implements QuPathExtension {
 	 */
 	private record CapturedStage(String title, Stage stage, Parent root) {}
 
-	private List<CapturedStage> getDialogWindowsPanes() {
+	/**
+	 * Collect the floating dialog windows to capture, emptying and closing each one as it is collected, so the
+	 * caller must dock every window returned.
+	 *
+	 * @param only just this window, leaving every other window untouched; all of them if null
+	 */
+	private List<CapturedStage> getDialogWindowsPanes(Stage only) {
 		List<CapturedStage> result = new ArrayList<>();
 		Stage mainStage = QuPathGUI.getInstance().getStage();
 
@@ -559,6 +639,8 @@ public class BentofxExtension implements QuPathExtension {
 
 		for (Window window : windows) {
 			if (window instanceof Stage stage) {
+				if (only != null && stage != only)
+					continue;
 				if (stage != mainStage && !(stage instanceof DragDropStage) && stage.isShowing()
 					&& !capturedWindows.isCapturedStage(stage) &&
 					stage.getTitle() != null && !stage.getTitle().isEmpty()) {
@@ -582,6 +664,13 @@ public class BentofxExtension implements QuPathExtension {
 	 * Capture floating dialog windows and dock them into BentoFX.
 	 */
 	private void bentoCapture() {
+		captureWindows(null);
+	}
+
+	/**
+	 * @param only capture just this window (a dialog that has just opened and has a saved place), or all of them if null
+	 */
+	private void captureWindows(Stage only) {
 		if (bento == null) {
 			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.bento-not-setup"));
 			logger.error(resources.getString("error.bento-not-setup"));
@@ -589,9 +678,9 @@ public class BentofxExtension implements QuPathExtension {
 		}
 
 		// Tabs that were torn out of the main window, or detached viewers, come back first
-		int reintegrated = reintegrateFloatingTabs();
+		int reintegrated = only == null ? reintegrateFloatingTabs() : 0;
 
-		List<CapturedStage> captured = getDialogWindowsPanes();
+		List<CapturedStage> captured = getDialogWindowsPanes(only);
 
 		for (CapturedStage cs : captured) {
 			String title = cs.title();
@@ -603,6 +692,10 @@ public class BentofxExtension implements QuPathExtension {
 
 			boolean narrow = paneWidth < NARROW_PANEL_PX;
 
+			// A dialog the restored layout had a place for goes there rather than by its width
+			LayoutSnapshot.Slot slot = pendingSlots.remove(title);
+			boolean edgeSlot = slot != null && "edge".equals(slot.placement);
+
 			Dockable dockable = builder.dockable();
 			dockable.setTitle(title);
 			// Peel anonymous wrappers, lift USE_PREF_SIZE caps, add grow hints.
@@ -610,7 +703,7 @@ public class BentofxExtension implements QuPathExtension {
 			PanelFitter.Fitted fitted = PanelFitter.fit(pane, narrow);
 			dockable.setNode(fitted.node());
 			// Remember the window's own size as the starting size of any pane made for it
-			paneSizing.declare(dockable, paneWidth, paneHeight);
+			paneSizing.declare(dockable, edgeSlot && slot.size > 0 ? slot.size : paneWidth, paneHeight);
 
 			// FLEX: the width only picks the initial leaf; the panel can then be dragged anywhere
 			dockable.setDragGroupMask(DragGroups.FLEX);
@@ -618,13 +711,20 @@ public class BentofxExtension implements QuPathExtension {
 
 			// Never use the leaf fields directly: a leaf that was emptied by dragging is pruned from the
 			// tree, and adding to it would silently put the panel in a detached, invisible leaf.
-			DockContainerLeaf target = narrow ? analysisTarget() : viewerTarget();
+			DockContainerLeaf target = slot == null ? null : slotTarget(slot);
+			boolean newRail = edgeSlot && target != null && target.getDockables().isEmpty();
+			if (target == null)
+				target = narrow ? analysisTarget() : viewerTarget();
 			if (target.addDockable(dockable)) {
 				target.selectDockable(dockable);
 				// Remember the original Stage so closing the tab can give the dialog back
 				capturedWindows.register(dockable, cs.stage(), pane, fitted);
-				logger.debug("Docked '{}' into leaf {}", title, target.getIdentifier());
+				logger.debug("Docked '{}' into leaf {}{}", title, target.getIdentifier(), slot == null ? "" : " (its saved place)");
+				if (newRail && slot.collapsed)
+					minimiseLater(target, dockable);
 			} else {
+				if (newRail && target.getParentContainer() != null)
+					target.getParentContainer().removeContainer(target);   // do not leave an empty rail behind
 				logger.warn("Could not dock '{}' into leaf {}; restoring its window", title, target.getIdentifier());
 				fitted.undo().run();
 				PanelFitter.detachFromParent(pane);
@@ -633,10 +733,238 @@ public class BentofxExtension implements QuPathExtension {
 			}
 		}
 
+		if (only != null && captured.isEmpty())
+			return;   // nothing to say about a window that turned out not to be capturable
 		Dialogs.showInfoNotification(
 			resources.getString("name"),
 			captured.isEmpty() && reintegrated == 0 ? resources.getString("info.no-capture") : resources.getString("info.windows-captured")
 		);
+	}
+
+	// ------------------------------------------------------------------ tabs that scripts add to the analysis pane
+
+	private Dockable newAnalysisDockable(Tab tab) {
+		Dockable dockable = builder.dockable();
+		dockable.setTitle(tab.getText());
+		dockable.setNode(tab.getContent());
+		dockable.setTooltip(tab.getTooltip());
+		dockable.setClosable(false);  // Remove close button
+		dockable.setDragGroupMask(DragGroups.ANALYSIS);
+		return dockable;
+	}
+
+	/**
+	 * A tab a script added to QuPath's analysis TabPane, and the BentoFX tab that shows it. Scripts add their tabs
+	 * to that TabPane (as they always have), which is hidden while BentoFX is on, so this carries them over:
+	 * a tab added there appears in the analysis pane, one removed from there disappears, and its title and
+	 * tooltip follow. The tab stays in the TabPane meanwhile, so that scripts that look for their earlier tab
+	 * there before adding a new one (by id, say) keep working.
+	 */
+	private final class ScriptTab {
+		private final Tab tab;
+		private final Dockable dockable;
+		private final javafx.beans.value.ChangeListener<String> textListener;
+		private final javafx.beans.value.ChangeListener<Tooltip> tooltipListener;
+
+		ScriptTab(Tab tab, Dockable dockable) {
+			this.tab = tab;
+			this.dockable = dockable;
+			textListener = (obs, old, text) -> dockable.setTitle(text);
+			tooltipListener = (obs, old, tooltip) -> dockable.setTooltip(tooltip);
+			tab.textProperty().addListener(textListener);
+			tab.tooltipProperty().addListener(tooltipListener);
+		}
+
+		/** Stop following the tab. */
+		void detach() {
+			tab.textProperty().removeListener(textListener);
+			tab.tooltipProperty().removeListener(tooltipListener);
+		}
+
+		/** Take the tab's pane out of BentoFX, wherever the user has moved it to. */
+		void remove() {
+			detach();
+			DockContainerLeaf leaf = dockable.getContainer();
+			if (leaf != null)
+				leaf.removeDockable(dockable);
+		}
+	}
+
+	/** Dockables that are being closed (DockableClosing seen, DockableRemoved not yet), to tell a close from a move. */
+	private final Set<Dockable> closingScriptTabs = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+
+	/**
+	 * Closing a script's tab with its close button does what closing a tab of a TabPane does: the tab's
+	 * {@code onCloseRequest} may veto it, the tab leaves QuPath's TabPane (so that it is not brought back when
+	 * BentoFX is switched off), and its {@code onClosed} runs.
+	 */
+	private void onScriptTabEvent(DockEvent event) {
+		if (event instanceof DockEvent.DockableClosing closing) {
+			Tab tab = scriptTabFor(closing.dockable());
+			if (tab == null)
+				return;
+			if (tab.getOnCloseRequest() != null) {
+				Event request = new Event(tab, tab, Tab.TAB_CLOSE_REQUEST_EVENT);
+				tab.getOnCloseRequest().handle(request);
+				if (request.isConsumed()) {
+					closing.cancel();
+					return;
+				}
+			}
+			// closeDockable() removes the dockable right after this event: a move never gets here
+			closingScriptTabs.add(closing.dockable());
+			Platform.runLater(() -> closingScriptTabs.remove(closing.dockable()));   // in case another listener cancels
+		} else if (event instanceof DockEvent.DockableRemoved removed && closingScriptTabs.remove(removed.dockable())) {
+			Tab tab = scriptTabFor(removed.dockable());
+			if (tab == null || analysisTabPane == null)
+				return;
+			analysisTabPane.getTabs().remove(tab);   // our listener sees the tab go and forgets it
+			if (tab.getOnClosed() != null)
+				tab.getOnClosed().handle(new Event(tab, tab, Tab.CLOSED_EVENT));
+		}
+	}
+
+	private Tab scriptTabFor(Dockable dockable) {
+		for (var entry : scriptTabs.entrySet())
+			if (entry.getValue().dockable == dockable)
+				return entry.getKey();
+		return null;
+	}
+
+	private void onAnalysisTabsChanged(ListChangeListener.Change<? extends Tab> change) {
+		while (change.next()) {
+			for (Tab tab : change.getRemoved()) {
+				ScriptTab shown = scriptTabs.remove(tab);
+				if (shown != null)
+					shown.remove();
+			}
+			for (Tab tab : change.getAddedSubList())
+				showScriptTab(tab);
+		}
+	}
+
+	private void showScriptTab(Tab tab) {
+		if (bento == null || scriptTabs.containsKey(tab))
+			return;
+		if (tab.getContent() == null) {
+			// Its content comes later: show it then
+			javafx.beans.value.ChangeListener<Node> once = new javafx.beans.value.ChangeListener<>() {
+				@Override
+				public void changed(javafx.beans.value.ObservableValue<? extends Node> obs, Node old, Node content) {
+					if (content == null)
+						return;
+					tab.contentProperty().removeListener(this);
+					if (analysisTabListener != null && analysisTabPane != null && analysisTabPane.getTabs().contains(tab))
+						showScriptTab(tab);
+				}
+			};
+			tab.contentProperty().addListener(once);
+			return;
+		}
+		Dockable dockable = newAnalysisDockable(tab);
+		dockable.setClosable(true);           // the built-in tabs cannot be closed, a script's can
+		analysisLeaf.addDockable(dockable);   // not analysisTarget(): that would show a hidden analysis pane
+		scriptTabs.put(tab, new ScriptTab(tab, dockable));
+		logger.debug("Showing the analysis tab '{}' that a script added", tab.getText());
+	}
+
+	/** Where a dialog with a saved slot goes; null if its slot cannot be honoured here (the usual rule applies). */
+	private DockContainerLeaf slotTarget(LayoutSnapshot.Slot slot) {
+		if (slot.placement == null)
+			return null;
+		return switch (slot.placement) {
+			case "analysis" -> analysisTarget();
+			case "viewers" -> viewerTarget();
+			case "edge" -> edgeLeaf(slot);
+			case "beside" -> besideLeaf(slot);
+			default -> null;
+		};
+	}
+
+	/**
+	 * The pane along the window's left or right edge that holds captured dialogs with this tab side: the one
+	 * there already, or a new one (a rail). Null if the window is not split side by side.
+	 */
+	private DockContainerLeaf edgeLeaf(LayoutSnapshot.Slot slot) {
+		if (rootBranch.getOrientation() != Orientation.HORIZONTAL)
+			return null;
+		boolean right = !"LEFT".equals(slot.edge);
+		Side side = Side.TOP;
+		try {
+			if (slot.side != null)
+				side = Side.valueOf(slot.side);
+		} catch (IllegalArgumentException ignored) {
+			// keep the default
+		}
+		List<DockContainer> children = rootBranch.getChildContainers();
+		if (!children.isEmpty()) {
+			DockContainer atEdge = right ? children.getLast() : children.getFirst();
+			if (atEdge instanceof DockContainerLeaf leaf && leaf != analysisLeaf && leaf.getSide() == side
+					&& !leaf.getDockables().isEmpty()
+					&& leaf.getDockables().stream().allMatch(d -> d.getDragGroupMask() == DragGroups.FLEX))
+				return leaf;
+		}
+		DockContainerLeaf leaf = builder.leaf("slot-" + System.nanoTime());
+		leaf.setSide(side);
+		Branches.insert(builder, rootBranch, right ? children.size() : 0, leaf);
+		return leaf;
+	}
+
+	/**
+	 * The pane split off one side of the analysis or viewer pane that holds this dialog's kind, as the slot says: the
+	 * one there already, or a new one made the way dropping a tab on that side of the pane makes it.
+	 */
+	private DockContainerLeaf besideLeaf(LayoutSnapshot.Slot slot) {
+		Side where;
+		try {
+			where = Side.valueOf(slot.edge);
+		} catch (IllegalArgumentException | NullPointerException e) {
+			return null;
+		}
+		DockContainerLeaf anchor = "analysis".equals(slot.anchor)
+				? (isAttached(analysisLeaf) ? analysisLeaf : null)
+				: findViewerLeaf();
+		if (anchor == null || anchor.getParentContainer() == null)
+			return null;
+		Side tabs = Side.TOP;
+		try {
+			if (slot.side != null)
+				tabs = Side.valueOf(slot.side);
+		} catch (IllegalArgumentException ignored) {
+			// keep the default
+		}
+
+		// A neighbour from an earlier dialog with the same slot: join it
+		boolean vertical = where == Side.TOP || where == Side.BOTTOM;
+		DockContainerBranch parent = anchor.getParentContainer();
+		if (parent.getOrientation() == (vertical ? Orientation.VERTICAL : Orientation.HORIZONTAL)) {
+			List<DockContainer> kids = parent.getChildContainers();
+			int i = kids.indexOf(anchor) + (where == Side.BOTTOM || where == Side.RIGHT ? 1 : -1);
+			if (i >= 0 && i < kids.size() && kids.get(i) instanceof DockContainerLeaf neighbour
+					&& neighbour != analysisLeaf && !neighbour.getDockables().isEmpty()
+					&& neighbour.getSide() == tabs
+					&& neighbour.getDockables().stream().allMatch(d -> d.getDragGroupMask() == DragGroups.FLEX))
+				return neighbour;
+		}
+		DockContainerLeaf leaf = builder.leaf("slot-" + System.nanoTime());
+		leaf.setSide(tabs);
+		Branches.splitBeside(builder, anchor, leaf, where);
+		return leaf;
+	}
+
+	/** Minimise a pane once it has been laid out, so that it remembers the size it opens at. */
+	private void minimiseLater(DockContainerLeaf leaf, Dockable dockable) {
+		Platform.runLater(() -> {
+			if (bento == null || !isAttached(leaf))
+				return;
+			var scene = rootBranch.getScene();
+			if (scene != null) {
+				scene.getRoot().applyCss();
+				scene.getRoot().layout();
+			}
+			if (!leaf.isCollapsed())
+				leaf.toggleCollapse(dockable);
+		});
 	}
 
 	/**
@@ -717,18 +1045,177 @@ public class BentofxExtension implements QuPathExtension {
 	 * separate from the one in QuPath's main window.
 	 */
 	private void collectFloatingLeaves(List<DockContainerLeaf> leaves, List<Stage> stages) {
+		floatingLeavesByStage().forEach((stage, stageLeaves) -> {
+			stages.add(stage);
+			leaves.addAll(stageLeaves);
+		});
+	}
+
+	private Map<Stage, List<DockContainerLeaf>> floatingLeavesByStage() {
+		Map<Stage, List<DockContainerLeaf>> result = new LinkedHashMap<>();
 		Stage mainStage = QuPathGUI.getInstance().getStage();
 		for (var floatingRoot : new ArrayList<>(bento.getRootContainers())) {
 			if (floatingRoot.equals(rootBranch))
 				continue;
 			var floatingScene = floatingRoot.getScene();
 			if (floatingScene != null && floatingScene.getWindow() instanceof Stage floatingStage
-					&& floatingStage != mainStage) {
-				collectLeaves(floatingRoot, leaves);
-				if (!stages.contains(floatingStage))
-					stages.add(floatingStage);
-			}
+					&& floatingStage != mainStage)
+				collectLeaves(floatingRoot, result.computeIfAbsent(floatingStage, s -> new ArrayList<>()));
 		}
+		return result;
+	}
+
+	// ------------------------------------------------------------------ saving and restoring the layout
+
+	/** The file the layout is saved in. */
+	private static Path layoutFile() {
+		String user = PathPrefs.userPathProperty().get();
+		Path dir = user == null || user.isBlank() ? Path.of(System.getProperty("user.home"), "QuPath") : Path.of(user);
+		return dir.resolve(LAYOUT_FILE_NAME);
+	}
+
+	/** Extensions > BentoFX > Save layout. */
+	private void bentoSaveLayout() {
+		if (bento == null) {
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.bento-not-setup"));
+			return;
+		}
+		try {
+			DockContainer hidden = analysisToggle.hiddenHost();
+			LayoutSnapshot snapshot = LayoutSnapshot.capture(rootBranch, hidden, analysisToggle.currentWidth(), analysisLeaf);
+			floatingLeavesByStage().forEach(snapshot::addFloating);
+			Path file = layoutFile();
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, snapshot.toJson(), StandardCharsets.UTF_8);
+			logger.info("Layout saved to {}", file);
+			Dialogs.showInfoNotification(EXTENSION_NAME, resources.getString("info.layout-saved"));
+		} catch (IOException | RuntimeException e) {
+			logger.error("Could not save the layout", e);
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.layout-save-failed"));
+		}
+	}
+
+	/**
+	 * Extensions > BentoFX > Restore layout, and the "restore on start" preference.
+	 *
+	 * @param interactive false for the automatic restore, which says nothing if there is no saved layout yet
+	 */
+	private void bentoRestoreLayout(boolean interactive) {
+		if (bento == null) {
+			if (interactive)
+				Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.bento-not-setup"));
+			return;
+		}
+		Path file = layoutFile();
+		if (!Files.isRegularFile(file)) {
+			if (interactive)
+				Dialogs.showInfoNotification(EXTENSION_NAME, resources.getString("info.layout-none"));
+			return;
+		}
+		LayoutSnapshot snapshot;
+		try {
+			snapshot = LayoutSnapshot.fromJson(Files.readString(file, StandardCharsets.UTF_8));
+		} catch (IOException e) {
+			logger.error("Could not read the saved layout {}", file, e);
+			snapshot = null;
+		}
+		if (snapshot == null) {
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.layout-unreadable"));
+			return;
+		}
+
+		// Everything must be in the main layout, and the analysis pane showing, before it is rebuilt
+		reintegrateFloatingTabs();
+		boolean wasHidden = analysisToggle.hiddenHost() != null;
+		analysisToggle.ensureVisible();
+		LayoutSnapshot toRestore = snapshot;
+		// Showing the pane queues a width correction of its own: let that run before the saved sizes go in
+		if (wasHidden)
+			Platform.runLater(() -> restoreLayout(toRestore));
+		else
+			restoreLayout(toRestore);
+	}
+
+	private void restoreLayout(LayoutSnapshot snapshot) {
+		if (bento == null)
+			return;
+		var host = new LayoutSnapshot.Host() {
+			@Override public DockBuilding builder() { return builder; }
+			@Override public DockContainerBranch root() { return rootBranch; }
+			@Override public DockContainerLeaf anchor() { return analysisLeaf; }
+			@Override public Dockable newViewer() { return menuInterceptor.newViewerPane(); }
+			@Override public PaneSizing sizing() { return paneSizing; }
+			@Override public void setAnalysisVisible(boolean visible) { analysisToggle.setVisible(visible); }
+		};
+		LayoutSnapshot.Result result = snapshot.apply(host);
+		pendingSlots.clear();
+		for (LayoutSnapshot.Slot slot : result.pendingSlots())
+			pendingSlots.put(slot.title, slot);
+		if (!pendingSlots.isEmpty())
+			logger.info("Layout restored; dialogs waiting to dock into their saved places when opened: {}", pendingSlots.keySet());
+
+		// Tabs the saved layout does not mention (new dialogs, say) go where capturing would have put them
+		for (Dockable d : result.unplaced()) {
+			DockContainerLeaf target = reintegrationTarget(d);
+			if (target.addDockable(d))
+				target.selectDockable(d);
+		}
+		result.finish().run();
+
+		if (result.failed())
+			Dialogs.showErrorNotification(resources.getString("error"), resources.getString("error.layout-restore-failed"));
+		else if (pendingSlots.isEmpty())
+			Dialogs.showInfoNotification(EXTENSION_NAME, resources.getString("info.layout-restored"));
+		else
+			Dialogs.showInfoNotification(EXTENSION_NAME, resources.getString("info.layout-restored-waiting")
+					+ " " + String.join(", ", pendingSlots.keySet()));
+		watchForDialogs();
+	}
+
+	// ------------------------------------------------------------------ docking dialogs into their saved places
+
+	private ListChangeListener<Window> dialogWatcher;
+
+	/**
+	 * Dock the dialogs the restored layout is waiting for as soon as their windows are open: those open now, and
+	 * any that open later (QuPath makes these windows on demand, so they cannot be opened for the layout).
+	 */
+	private void watchForDialogs() {
+		if (pendingSlots.isEmpty())
+			return;
+		if (dialogWatcher == null) {
+			dialogWatcher = change -> {
+				while (change.next())
+					for (Window w : change.getAddedSubList())
+						dockWhenReady(w);
+			};
+			Window.getWindows().addListener(dialogWatcher);
+		}
+		for (Window w : new ArrayList<>(Window.getWindows()))
+			dockWhenReady(w);
+	}
+
+	private void stopWatchingForDialogs() {
+		if (dialogWatcher != null) {
+			Window.getWindows().removeListener(dialogWatcher);
+			dialogWatcher = null;
+		}
+	}
+
+	private void dockWhenReady(Window window) {
+		if (!(window instanceof Stage stage) || stage instanceof DragDropStage || stage.getModality() != Modality.NONE)
+			return;
+		if (!pendingSlots.containsKey(stage.getTitle()))
+			return;
+		// Give the window a moment to be laid out: its size is part of how it is fitted into its pane
+		PauseTransition wait = new PauseTransition(Duration.millis(250));
+		wait.setOnFinished(e -> {
+			if (bento != null && stage.isShowing() && pendingSlots.containsKey(stage.getTitle()))
+				captureWindows(stage);
+			if (pendingSlots.isEmpty())
+				stopWatchingForDialogs();
+		});
+		wait.play();
 	}
 
 	/** Bring a docked captured dialog to the front: show its pane, select its tab, focus it. */

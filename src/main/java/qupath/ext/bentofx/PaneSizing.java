@@ -13,6 +13,7 @@ import software.coley.bentofx.dockable.Dockable;
 import software.coley.bentofx.event.DockEvent;
 import software.coley.bentofx.layout.DockContainer;
 import software.coley.bentofx.layout.container.DockContainerBranch;
+import software.coley.bentofx.layout.container.DockContainerLeaf;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -76,6 +77,22 @@ final class PaneSizing {
     double declaredWidth(Dockable dockable) {
         double[] wh = declared.get(dockable);
         return wh == null ? -1 : wh[0];
+    }
+
+    /**
+     * Size the children of a branch that is already laid out from pixel sizes saved earlier (restoring a layout),
+     * with the same policy as for live changes: panels keep their pixels, viewers share what is left in
+     * proportion to their saved sizes. Whatever the structural events of the rebuild queued for this branch is
+     * dropped. If the branch has no size yet the work is queued like any other change.
+     */
+    void applyNow(DockContainerBranch branch, Map<DockContainer, Double> sizes) {
+        Pending p = new Pending();
+        p.sizes.putAll(sizes);
+        pending.remove(branch);
+        if (!apply(branch, p)) {
+            pending.put(branch, p);
+            Platform.runLater(() -> run(branch));
+        }
     }
 
     private boolean disposed;
@@ -161,6 +178,24 @@ final class PaneSizing {
     // ------------------------------------------------------------------ apply
 
     /** @return false if the branch is not ready yet (no size / dividers), true when done or nothing to do */
+    /**
+     * What BentoFX gives a minimised leaf: the thickness of its tab bar. Its own (protected) figure is used so the
+     * two agree; failing that, whatever the leaf measures now.
+     */
+    private static double collapsedSize(DockContainerLeaf leaf, boolean horizontal) {
+        try {
+            java.lang.reflect.Method m = DockContainerLeaf.class.getDeclaredMethod("getCollapsedSize");
+            m.setAccessible(true);
+            double size = (double) m.invoke(leaf);
+            if (size > 0)
+                return size;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            logger.debug("Could not read the minimised size of a pane ({})", e.toString());
+        }
+        double now = horizontal ? leaf.getWidth() : leaf.getHeight();
+        return now > 0 ? now : 30;
+    }
+
     private boolean apply(DockContainerBranch branch, Pending p) {
         List<DockContainer> kids = new ArrayList<>(branch.getChildContainers());
         int n = kids.size();
@@ -196,9 +231,14 @@ final class PaneSizing {
             fixed[i] = isPanelOnly(c);
             Double known = p.sizes.get(c);
             if (fixed[i]) {
-                double s = known != null ? known
-                        : remembered.getOrDefault(c, declaredExtent(c, horizontal));
-                size[i] = Math.max(s, minFixed);
+                if (c instanceof DockContainerLeaf leaf && leaf.isCollapsed()) {
+                    // A minimised pane is just its tab bar: no minimum panel width (that would reopen most of it)
+                    size[i] = collapsedSize(leaf, horizontal);
+                } else {
+                    double s = known != null ? known
+                            : remembered.getOrDefault(c, declaredExtent(c, horizontal));
+                    size[i] = Math.max(s, minFixed);
+                }
                 fixedSum += size[i];
             } else {
                 flexCount++;

@@ -2,6 +2,7 @@ package qupath.ext.bentofx;
 
 import javafx.beans.InvalidationListener;
 import javafx.collections.ListChangeListener;
+import javafx.geometry.HPos;
 import javafx.scene.Group;
 import javafx.scene.Node;
 import javafx.scene.layout.GridPane;
@@ -22,7 +23,7 @@ import java.util.List;
  *       control it has no style class, so no stylesheet rule can reach it (and a {@code Text} is black unless
  *       told otherwise). It gets the class {@value #TITLE_CLASS}, which {@code bento.css} colours like
  *       Modena's own tabs, so it follows the theme.</li>
- *   <li><b>Horizontal balance.</b> A horizontal tab's content is a grid of three cells: graphic, title and
+ *   <li><b>Balance.</b> A horizontal tab's content is a grid of three cells: graphic, title and
  *       close button. A cell that is empty (no graphic; not closable) still takes up a column, and the
  *       grid's gap goes with it, so the title sat further from the left edge than from the right. Empty cells
  *       are taken out here, so the gaps left and right of the title are equal.</li>
@@ -64,10 +65,16 @@ final class ThemedHeader extends Header {
                 title.getStyleClass().add(TITLE_CLASS);
         }
 
-        // Only a horizontal tab (everything in row 0). A vertical one stacks its cells in a column.
+        // A horizontal tab has everything in row 0; a vertical one (tabs at the left or right) stacks its
+        // cells in a column
+        boolean vertical = false;
         for (Node node : nodes) {
             Integer row = GridPane.getRowIndex(node);
             if (row != null && row != 0)
+                vertical = true;
+        }
+        if (vertical) {
+            tidyVertical(grid, nodes);
                 return;
         }
 
@@ -85,6 +92,31 @@ final class ThemedHeader extends Header {
             node.setManaged(!empty);
             if (!empty)
                 GridPane.setColumnIndex(node, column++);
+        }
+    }
+
+    /**
+     * The same two fixes for a vertical tab, with the axes swapped: an empty cell takes out a row (and the gap
+     * that goes with it), and every cell is centred in the column. A GridPane aligns a child to the left of its
+     * column, so a title narrower than the close button sat at the left edge, with the cross right of centre.
+     */
+    private static void tidyVertical(GridPane grid, List<Node> nodes) {
+        nodes.sort(Comparator.comparingInt(node -> {
+            Integer row = GridPane.getRowIndex(node);
+            return row == null ? 0 : row;
+        }));
+        int row = 0;
+        for (Node node : nodes) {
+            boolean empty = false;
+            if (node instanceof Pane pane && !(node instanceof GridPane)) {
+                watch(pane, grid);
+                empty = pane.getChildren().stream().noneMatch(Node::isManaged);
+            }
+            node.setManaged(!empty);
+            if (!empty) {
+                GridPane.setRowIndex(node, row++);
+                GridPane.setHalignment(node, HPos.CENTER);
+            }
         }
     }
 

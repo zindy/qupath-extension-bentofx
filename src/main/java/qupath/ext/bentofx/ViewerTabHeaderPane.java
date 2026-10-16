@@ -18,8 +18,8 @@ import java.util.function.Consumer;
  * A {@link HeaderPane} that adds a "+" (new viewer) button to leaves that hold viewers.
  * <p>
  * Normally the "+" sits right after the last tab, drawn by {@link ViewerTabHeaders}. This class adds the
- * fallback: a "+" in the corner of the tab bar, shown only when the inline one is not (tabs fill the bar,
- * or the tabs are on the left/right side).
+ * fallback: a "+" in the corner of the tab bar, shown only when the inline one is not (the tabs fill
+ * the bar, so there is no room right after the last one).
  * <p>
  * The action is passed in through the leaf's {@link javafx.scene.Node#getProperties() properties} under
  * {@link #ADD_VIEWER_HANDLER}: {@link HeaderPane}'s constructor calls {@link #createButtonArray()} itself,

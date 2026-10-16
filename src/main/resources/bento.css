@@ -180,6 +180,29 @@
     -fx-background-color: derive(-fx-color, -15%);
 }
 
+/* Vertical tabs (tabs at the left or right): the horizontal rules above with the axes swapped. Along the text
+   (top to bottom) the padding is 8, across it 6; the title, the icon and the x are stacked, so the gaps between
+   them are above or below rather than left or right. ThemedHeader centres each of them in the column. */
+.header:left GridPane,
+.header:right GridPane {
+    -fx-hgap: 0;
+    -fx-vgap: 0;
+    -fx-padding: 8px 6px 8px 6px;
+}
+.header:left GridPane > Pane > Label {
+    -fx-padding: 6px 0 0 0;      /* the icon is below the title */
+}
+.header:right GridPane > Pane > Label {
+    -fx-padding: 0 0 6px 0;      /* the icon is above the title */
+}
+/* The x is below the title: no left offset, no baseline correction (both belong to the horizontal tab) */
+.header:left .close-button,
+.header:right .close-button {
+    -fx-background-insets: 6px 0 0 0;
+    -fx-padding: 6px 2px 0 2px;  /* top padding = gap between the title and the x */
+    -fx-translate-y: 0;
+}
+
 /* ------------------------------------------------------------------ buttons in the strip */
 /* "▼" (tab list), "≡" (menu) and "+" (new viewer): flat, and raised like a hovered tab on mouse over */
 .header-pane .corner-button,

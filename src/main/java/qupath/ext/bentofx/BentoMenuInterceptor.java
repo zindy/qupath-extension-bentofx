@@ -668,6 +668,17 @@ public class BentoMenuInterceptor {
      * Browser-style "new tab": create a viewer, add it as the last tab of {@code leaf}, select that tab and
      * make the new viewer the active one (selecting the tab does this, see {@link #onDockEvent}).
      */
+    /** A new viewer pane that is not in any leaf yet (for the caller to place), or null if one cannot be made. */
+    public Dockable newViewerPane() {
+        if (disposed)
+            return null;
+        QuPathViewer newViewer = createRegisteredViewer();
+        if (newViewer == null)
+            return null;
+        registerViewer(newViewer);
+        return newViewerDockable(newViewer);
+    }
+
     public void addViewerTab(DockContainerLeaf leaf) {
         if (leaf == null || disposed)
             return;

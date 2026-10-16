@@ -93,6 +93,11 @@ final class AnalysisPaneToggle {
         visible.set(true);
     }
 
+    /** Show or hide the analysis pane, as Shift+A does. */
+    void setVisible(boolean show) {
+        visible.set(show);
+    }
+
     /** The direct child of the root that contains the analysis leaf (the leaf itself unless it was split). */
     private DockContainer host() {
         DockContainer c = analysisLeaf;
