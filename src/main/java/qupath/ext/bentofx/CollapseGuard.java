@@ -73,7 +73,7 @@ final class CollapseGuard {
     private void expandStuckLeaves() {
         List<DockContainerLeaf> leaves = new ArrayList<>();
         for (var root : new ArrayList<>(bento.getRootContainers()))
-            BentofxExtension.collectLeaves(root, leaves);
+            Branches.collectLeaves(root, leaves);
         for (DockContainerLeaf leaf : leaves) {
             if (leaf.isCollapsed() && !canToggle(leaf))
                 expand(leaf);

@@ -21,7 +21,7 @@ import java.util.function.Consumer;
  * fallback: a "+" in the corner of the tab bar, shown only when the inline one is not (the tabs fill
  * the bar, so there is no room right after the last one).
  * <p>
- * The action is passed in through the leaf's {@link javafx.scene.Node#getProperties() properties} under
+ * The action is passed in through the leaf's {@link Node#getProperties() properties} under
  * {@link #ADD_VIEWER_HANDLER}: {@link HeaderPane}'s constructor calls {@link #createButtonArray()} itself,
  * before any field of this subclass is initialised, so this class cannot take the handler as a
  * constructor argument and keep it in a field (same trap as {@code DragGroups.newBento()}).

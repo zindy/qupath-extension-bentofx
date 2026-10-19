@@ -14,7 +14,6 @@ import javafx.stage.PopupWindow;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.util.Duration;
-import qupath.lib.gui.QuPathGUI;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.coley.bentofx.dockable.Dockable;
@@ -130,7 +129,6 @@ final class CapturedWindows {
         stage.setOpacity(0);   // a re-show while docked must not flash an empty dialog
         Node dockedNode = fitted.node();
         dockedNode.addEventHandler(KeyEvent.KEY_PRESSED, KEY_GUARD);
-        KeyTrace.install(QuPathGUI.getInstance().getStage().getScene());
         e.showListener = (obs, was, now) -> {
             if (!now)
                 return;

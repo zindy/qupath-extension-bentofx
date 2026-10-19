@@ -1,6 +1,7 @@
 package qupath.ext.bentofx;
 
 import javafx.geometry.Side;
+import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.input.Dragboard;
 import javafx.scene.input.TransferMode;
@@ -22,7 +23,7 @@ import software.coley.bentofx.util.DragUtils;
  * half of the target (a panel wider than that is shrunk to fit anyway). Viewers still show half.
  * <p>
  * Only the drag-over handler is replaced; dropping is BentoFX's own. The size comes in through the leaf's
- * {@link javafx.scene.Node#getProperties() properties} under {@link #DROP_EXTENT}, because
+ * {@link Node#getProperties() properties} under {@link #DROP_EXTENT}, because
  * {@link ContentWrapper}'s constructor calls {@link #setupDragDrop} before this class's fields exist.
  */
 final class SizedHintContentWrapper extends ContentWrapper {

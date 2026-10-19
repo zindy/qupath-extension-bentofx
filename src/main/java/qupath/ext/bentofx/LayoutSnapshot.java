@@ -20,12 +20,12 @@ import software.coley.bentofx.layout.container.DockContainerLeaf;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.HashSet;
 import java.util.Set;
 
 /**
@@ -179,8 +179,8 @@ final class LayoutSnapshot {
                                      DockContainerLeaf anchor) {
         List<DockContainerLeaf> leaves = new ArrayList<>();
         if (hiddenHost != null)
-            collectLeaves(hiddenHost, leaves);
-        collectLeaves(root, leaves);
+            Branches.collectLeaves(hiddenHost, leaves);
+        Branches.collectLeaves(root, leaves);
         boolean horizontal = root.getOrientation() == Orientation.HORIZONTAL;
         for (DockContainerLeaf leaf : leaves) {
             List<Dockable> dialogs = leaf.getDockables().stream().filter(d -> DIALOG.equals(kindOf(d))).toList();
@@ -240,7 +240,7 @@ final class LayoutSnapshot {
                     if (i < 0 || i >= kids.size())
                         continue;
                     List<DockContainerLeaf> inside = new ArrayList<>();
-                    collectLeaves(kids.get(i), inside);
+                    Branches.collectLeaves(kids.get(i), inside);
                     String kind = inside.contains(analysisAnchor) ? "analysis"
                             : inside.stream().anyMatch(l -> l.getDockables().stream().anyMatch(d -> VIEWER.equals(kindOf(d)))) ? "viewers" : null;
                     if (kind != null) {
@@ -442,7 +442,7 @@ final class LayoutSnapshot {
         DockContainerLeaf anchor = host.anchor();
 
         List<DockContainerLeaf> oldLeaves = new ArrayList<>();
-        collectLeaves(root, oldLeaves);
+        Branches.collectLeaves(root, oldLeaves);
         Pool pool = new Pool();
         for (DockContainerLeaf leaf : oldLeaves)
             pool.remaining.addAll(leaf.getDockables());
@@ -557,7 +557,7 @@ final class LayoutSnapshot {
     private DockContainer build(Resolved r, Host host, List<Runnable> sizing, List<DockContainerLeaf> toCollapse) {
         if ("leaf".equals(r.spec.type)) {
             DockContainerLeaf leaf = r.spec.anchor ? host.anchor() : host.builder().leaf(newId());
-            leaf.setSide(parseSide(r.spec.side));
+            leaf.setSide(Branches.sideOrTop(r.spec.side));
             for (Dockable d : r.dockables)
                 leaf.addDockable(d);
             int selected = r.spec.selected >= 0 && r.spec.selected < r.dockables.size() ? r.spec.selected : 0;
@@ -614,7 +614,7 @@ final class LayoutSnapshot {
         DragDropStage stage = root.getBento().stageBuilding().newStageForDockable(root.getScene(), first, width, height);
         DockContainerLeaf leaf = first.getContainer();
         if (leaf != null) {
-            leaf.setSide(parseSide(f.side));
+            leaf.setSide(Branches.sideOrTop(f.side));
             for (int i = 1; i < w.dockables.size(); i++)
                 leaf.addDockable(w.dockables.get(i));
             int selected = f.selected >= 0 && f.selected < w.dockables.size() ? f.selected : 0;
@@ -639,25 +639,7 @@ final class LayoutSnapshot {
         top.layout();
     }
 
-    private static Side parseSide(String name) {
-        if (name == null)
-            return Side.TOP;
-        try {
-            return Side.valueOf(name);
-        } catch (IllegalArgumentException e) {
-            return Side.TOP;
-        }
-    }
-
     private static String newId() {
         return "restored-" + System.nanoTime();
-    }
-
-    static void collectLeaves(DockContainer c, List<DockContainerLeaf> out) {
-        if (c instanceof DockContainerLeaf leaf)
-            out.add(leaf);
-        else if (c instanceof DockContainerBranch branch)
-            for (DockContainer child : branch.getChildContainers())
-                collectLeaves(child, out);
     }
 }

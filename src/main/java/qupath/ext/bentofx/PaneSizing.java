@@ -15,8 +15,10 @@ import software.coley.bentofx.layout.DockContainer;
 import software.coley.bentofx.layout.container.DockContainerBranch;
 import software.coley.bentofx.layout.container.DockContainerLeaf;
 
+import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -184,7 +186,7 @@ final class PaneSizing {
      */
     private static double collapsedSize(DockContainerLeaf leaf, boolean horizontal) {
         try {
-            java.lang.reflect.Method m = DockContainerLeaf.class.getDeclaredMethod("getCollapsedSize");
+            Method m = DockContainerLeaf.class.getDeclaredMethod("getCollapsedSize");
             m.setAccessible(true);
             double size = (double) m.invoke(leaf);
             if (size > 0)
@@ -304,7 +306,7 @@ final class PaneSizing {
 
         if (logger.isDebugEnabled())
             logger.debug("Sized branch {} ({}): px={} fixed={}",
-                    branch.getIdentifier(), horizontal ? "H" : "V", java.util.Arrays.toString(px), java.util.Arrays.toString(fixed));
+                    branch.getIdentifier(), horizontal ? "H" : "V", Arrays.toString(px), Arrays.toString(fixed));
         return true;
     }
 

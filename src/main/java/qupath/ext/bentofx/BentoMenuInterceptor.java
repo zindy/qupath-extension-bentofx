@@ -26,18 +26,21 @@ import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.gui.viewer.ViewerManager;
 import software.coley.bentofx.building.DockBuilding;
 import software.coley.bentofx.dockable.Dockable;
+import software.coley.bentofx.event.DockEvent;
 import software.coley.bentofx.layout.DockContainer;
 import software.coley.bentofx.layout.container.DockContainerBranch;
 import software.coley.bentofx.layout.container.DockContainerLeaf;
-import software.coley.bentofx.util.BentoUtils;
-import software.coley.bentofx.event.DockEvent;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.ResourceBundle;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -68,14 +71,14 @@ public class BentoMenuInterceptor {
      * Per viewer because those handlers capture the viewer: the entry is dropped when the viewer is closed.
      */
     private final Map<QuPathViewer, Map<MenuItem, EventHandler<ActionEvent>>> originalActions =
-            new java.util.IdentityHashMap<>();
+            new IdentityHashMap<>();
 
     /** Same as {@link #originalActions}, for the items of QuPath's own View > Multi-view menu. */
-    private final Map<MenuItem, EventHandler<ActionEvent>> menuBarOriginals = new java.util.IdentityHashMap<>();
+    private final Map<MenuItem, EventHandler<ActionEvent>> menuBarOriginals = new IdentityHashMap<>();
 
     /** Viewers whose onContextMenuRequested we set (QuPath itself leaves it null). */
-    private final java.util.Set<QuPathViewer> registered =
-            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    private final Set<QuPathViewer> registered =
+            Collections.newSetFromMap(new IdentityHashMap<>());
 
     private boolean disposed;
 
@@ -273,7 +276,7 @@ public class BentoMenuInterceptor {
                 for (Window window : Window.getWindows()) {
                     if (window instanceof ContextMenu menu && menu.isShowing()) {
                         rebindMenuItems(menu.getItems(),
-                                originalActions.computeIfAbsent(viewer, v -> new java.util.IdentityHashMap<>()),
+                                originalActions.computeIfAbsent(viewer, v -> new IdentityHashMap<>()),
                                 () -> viewer, true);
                     }
                 }
@@ -423,7 +426,7 @@ public class BentoMenuInterceptor {
 
     private long countViewersInMain() {
         List<DockContainerLeaf> leaves = new ArrayList<>();
-        BentofxExtension.collectLeaves(rootBranch, leaves);
+        Branches.collectLeaves(rootBranch, leaves);
         return leaves.stream().flatMap(l -> l.getDockables().stream())
                 .filter(viewerByDockable::containsKey).count();
     }
@@ -580,7 +583,7 @@ public class BentoMenuInterceptor {
     /** Leaf of the active viewer if that is in the main layout, else any main-layout leaf with viewers. */
     private DockContainerLeaf mainViewerLeaf() {
         List<DockContainerLeaf> leaves = new ArrayList<>();
-        BentofxExtension.collectLeaves(rootBranch, leaves);
+        Branches.collectLeaves(rootBranch, leaves);
         QuPathViewer active = QuPathGUI.getInstance().getViewerManager().getActiveViewer();
         for (DockContainerLeaf l : leaves)
             if (l.getDockables().stream().anyMatch(d -> viewerByDockable.get(d) == active && active != null))
@@ -590,26 +593,6 @@ public class BentoMenuInterceptor {
                 return l;
         return leaves.isEmpty() ? null : leaves.get(0);
     }
-
-    private int indexOfChild( DockContainerBranch parent, Node child) {
-        List<Node> children =
-                getChildrenReflectively(parent);
-
-        return children.indexOf(child);
-    }
-
-    private void moveChild( DockContainerBranch parent, Node child, int targetIndex) {
-        List<Node> children =
-                getChildrenReflectively(parent);
-
-        children.remove(child);
-
-        if (targetIndex > children.size())
-            targetIndex = children.size();
-
-        children.add(targetIndex, child);
-    }
-
 
     private void dumpTree(DockContainer c, String indent, StringBuilder sb) {
         if (c instanceof DockContainerBranch b) {
@@ -621,7 +604,7 @@ public class BentoMenuInterceptor {
               .append(" children=").append(b.getChildContainers().size())
               .append(" items=").append(b.getItems().size())
               .append(String.format(" size=%.0fx%.0f", b.getWidth(), b.getHeight()))
-              .append(" dividers=").append(java.util.Arrays.toString(b.getDividerPositions()))
+              .append(" dividers=").append(Arrays.toString(b.getDividerPositions()))
               .append(mismatch ? "  <-- MISMATCH" : "").append('\n');
             for (DockContainer child : b.getChildContainers())
                 dumpTree(child, indent + "  ", sb);
@@ -793,21 +776,8 @@ public class BentoMenuInterceptor {
                 viewer.getView().setOnContextMenuRequested(null);
         }
         registered.clear();
-        for (Dockable d : new java.util.ArrayList<>(titleBindings.keySet()))
+        for (Dockable d : new ArrayList<>(titleBindings.keySet()))
             unbindTitle(d);
         viewerByDockable.clear();
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<Node> getChildrenReflectively(Parent parent) {
-        if (parent == null) return new ArrayList<>();
-        try {
-            Method method = Parent.class.getDeclaredMethod("getChildren");
-            method.setAccessible(true);
-            return (List<Node>) method.invoke(parent);
-        } catch (Exception e) {
-            logger.error("Failed to access children reflectively from Parent", e);
-            return new ArrayList<>();
-        }
     }
 }

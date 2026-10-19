@@ -16,30 +16,23 @@ val releaseVersion = if (githubTag != null && githubTag.startsWith("v")) {
     file("VERSION").readText().trim() // Fallback to your SNAPSHOT file
 }
 
-// TODO: Configure your extension here (please change the defaults!)
 qupathExtension {
     name = "qupath-extension-bentofx"
     group = "io.github.qupath"
     version = releaseVersion
-    description = "A simple QuPath extension"
+    description = "Dockable panels for QuPath, built on BentoFX"
     automaticModule = "io.github.qupath.extension.bentofx"
 }
 
-// TODO: Define your dependencies here
 dependencies {
 
     // Extension relies on BentoFX
     implementation("software.coley.bento-fx:core:0.16.0")
-    //implementation "software.coley.bento-fx:core:${version}"
-
 
     // Main dependencies for most QuPath extensions
     shadow(libs.bundles.qupath)
     shadow(libs.bundles.logging)
     shadow(libs.qupath.fxtras)
-
-    // If you aren't using Groovy, this can be removed
-    //shadow(libs.bundles.groovy)
 
     // For testing
     testImplementation(libs.bundles.qupath)
@@ -48,6 +41,6 @@ dependencies {
 }
 
 tasks.shadowJar {
-    archiveClassifier.set("") 
+    archiveClassifier.set("")
     // No relocate needed - just package everything as-is
 }

@@ -3,6 +3,7 @@ package qupath.ext.bentofx;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.collections.ListChangeListener;
 import javafx.geometry.HPos;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
@@ -66,7 +67,7 @@ final class ViewerTabHeaders extends Headers {
 
         // Scrolling: the selected tab is brought into view when the selection or the tabs change
         keepInViewProperty().addListener((obs, old, cur) -> revealSelected = true);
-        getChildren().addListener((javafx.collections.ListChangeListener<Node>) c -> revealSelected = true);
+        getChildren().addListener((ListChangeListener<Node>) c -> revealSelected = true);
         addEventHandler(ScrollEvent.SCROLL, this::onScroll);
     }
 

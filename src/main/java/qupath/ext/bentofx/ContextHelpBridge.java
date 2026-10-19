@@ -17,6 +17,7 @@ import qupath.lib.gui.commands.ContextHelpViewer;
 import qupath.lib.gui.localization.QuPathResources;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
@@ -97,7 +98,7 @@ final class ContextHelpBridge {
 
     void dispose() {
         Window.getWindows().removeListener(windowListener);
-        for (Window w : new java.util.ArrayList<>(watched))
+        for (Window w : new ArrayList<>(watched))
             unwatch(w);
         logger.debug("Context help bridge removed");
     }
@@ -171,7 +172,7 @@ final class ContextHelpBridge {
         Tooltip tooltip = null;
         if (node instanceof Control control)
             tooltip = control.getTooltip();
-        if (tooltip == null && node.getProperties().get("javafx.scene.control.Tooltip") instanceof Tooltip tt)
+        if (tooltip == null && node.getProperties().get("Tooltip") instanceof Tooltip tt)
             tooltip = tt;
         return tooltip == null ? null : tooltip.getText();
     }
